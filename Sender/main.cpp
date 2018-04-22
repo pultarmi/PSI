@@ -12,7 +12,7 @@
 #include <fstream>
 #include <iostream>
 
-#define TARGET_IP	"127.0.0.1"
+#define TARGET_IP	"192.168.0.129"
 //#define TARGET_IP	"192.168.43.10"
 #define BUFFERS_LEN 1024
 
@@ -22,9 +22,10 @@
 class Sender{
 private:
     int sockfd;
-    struct sockaddr_in local;
-    char buffer_tx[BUFFERS_LEN];
-    sockaddr_in addrDest;
+    struct sockaddr_in local, addrDest;
+    socklen_t fromlen;
+    char buffer[BUFFERS_LEN];
+    ssize_t recv_len;
 public:
     Sender(){
         local.sin_family = AF_INET;
@@ -41,31 +42,51 @@ public:
         addrDest.sin_family = AF_INET;
         addrDest.sin_port = htons(TARGET_PORT);
         inet_pton(AF_INET, TARGET_IP, &addrDest.sin_addr.s_addr);
+
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 10000;
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     }
-    void send_datagram(unsigned int size){
-        sendto(sockfd, buffer_tx, size, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+    inline void send_datagram(unsigned int size){
+        while(1){
+            sendto(sockfd, buffer, size, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+
+            recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &addrDest, &fromlen);
+            if(recv_len < BUFFERS_LEN)
+                buffer[recv_len] = 0;
+            if(recv_len != -1){
+                if(strcmp(buffer, "NAME") == 0){
+                    std::cout << "received NAME ACK" << std::endl;
+                    break;
+                }
+                else if(strcmp(buffer, "LENG") == 0){
+                    std::cout << "received LENG ACK" << std::endl;
+                    break;
+                }
+                else if(strcmp(buffer, "DATA") == 0)
+                    break;
+            }
+        }
     }
     int send(const char *name){
-        strncpy(buffer_tx, name, BUFFERS_LEN);
-//        sendto(sockfd, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-        send_datagram(strlen(buffer_tx));
+        strncpy(buffer, name, BUFFERS_LEN);
+        send_datagram(strlen(buffer));
 
         FILE* file_in = fopen(name, "rb");
         fseek(file_in, 0L, SEEK_END);
         unsigned int file_size = ftell(file_in);
         char size[4];
         memcpy(size, (void*)&file_size, 4);
-        strncpy(buffer_tx, size, BUFFERS_LEN);
-//        sendto(sockfd, buffer_tx, 4, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+        memcpy(buffer, size, 4);
         send_datagram(4);
 
         size_t length;
         int pos = 0;
         rewind(file_in);
-        while((length = fread(&buffer_tx[4], 1, BUFFERS_LEN - 4, file_in)) > 0) {
-            if (length+4 < sizeof(buffer_tx)) buffer_tx[length+4] = 0;
-            memcpy((void*)&buffer_tx, (void*)&pos, 4);
-//            sendto(sockfd, buffer_tx, 4 + length, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+        while((length = fread(&buffer[4], 1, BUFFERS_LEN - 4, file_in)) > 0) {
+            if (length+4 < sizeof(buffer)) buffer[length+4] = 0;
+            memcpy((void*)&buffer, (void*)&pos, 4);
             send_datagram(4+length);
             pos += length;
         }
@@ -83,6 +104,6 @@ int main(int argc, char** argv) {
 //        return 1;
 //    }
 //    sender.send(argv[1]);
-    sender.send("idea.png");
+    sender.send("vit_normal.ppm");
     return 0;
 }

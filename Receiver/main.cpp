@@ -12,7 +12,7 @@
 #include <fstream>
 #include <iostream>
 
-#define TARGET_IP	"127.0.0.1"
+//#define TARGET_IP	"127.0.0.1"
 //#define TARGET_IP	"192.168.43.10"
 #define BUFFERS_LEN 1024
 
@@ -24,7 +24,7 @@ private:
     struct sockaddr_in local, from;
     socklen_t fromlen;
     int sockfd;
-    char buffer_rx[BUFFERS_LEN];
+    char buffer[BUFFERS_LEN];
     ssize_t recv_len;
 
 public:
@@ -45,27 +45,36 @@ public:
     }
 
     char *receive_name(){
-        recv_len = recvfrom(sockfd, buffer_rx, sizeof(buffer_rx), 0, (sockaddr *) &from, &fromlen);
-        if (recv_len < sizeof(buffer_rx)) buffer_rx[recv_len] = 0;
-        char *file_name = new char[recv_len+1];
-        strncpy(file_name, buffer_rx, recv_len+1);
+        recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+        if (recv_len < sizeof(buffer)) buffer[recv_len] = 0;
+        auto *file_name = new char[recv_len+1];
+        strncpy(file_name, buffer, recv_len+1);
+
+        sendto(sockfd, "NAME", 4, 0, (sockaddr*)&from, sizeof(from));
+
         return file_name;
     }
 
     unsigned int receive_length(){
-        buffer_rx[0] = buffer_rx[1] = buffer_rx[2] = buffer_rx[3] = 0;
-        recv_len = recvfrom(sockfd, buffer_rx, sizeof(buffer_rx), 0, (sockaddr *) &from, &fromlen);
+        buffer[0] = buffer[1] = buffer[2] = buffer[3] = 0;
+        recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
         unsigned int size;
-        memcpy((void *) &size, buffer_rx, 4);
+        memcpy((void *) &size, buffer, 4);
+
+        sendto(sockfd, "LENG", 4, 0, (sockaddr*)&from, sizeof(from));
+
         return size;
     }
 
     void receive_data(FILE *file_out, unsigned int length){
         unsigned int pos = 0;
         for (; pos < length; pos += recv_len - 4) {
-            recv_len = recvfrom(sockfd, buffer_rx, sizeof(buffer_rx), 0, (sockaddr *) &from, &fromlen);
-            memcpy((void *) &pos, buffer_rx, 4);
-            fwrite(&buffer_rx[4], recv_len - 4, 1, file_out);
+            recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+
+            sendto(sockfd, "DATA", 4, 0, (sockaddr*)&from, sizeof(from));
+
+            memcpy((void *) &pos, buffer, 4);
+            fwrite(&buffer[4], recv_len - 4, 1, file_out);
         }
     }
 
