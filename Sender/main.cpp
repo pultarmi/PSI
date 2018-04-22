@@ -19,6 +19,12 @@
 #define TARGET_PORT 6666
 #define LOCAL_PORT 5555
 
+const char ACK_length[] = "LENG+";
+const char ACK_name[] = "NAME+";
+const char ACK_data[] = "DATA+";
+const char ACK_hash[] = "HASH+";
+const unsigned short CRC_length = 32;
+
 class Sender{
 private:
     int sockfd;
@@ -56,18 +62,25 @@ public:
             if(recv_len < BUFFERS_LEN)
                 buffer[recv_len] = 0;
             if(recv_len != -1){
-                if(strcmp(buffer, "NAME") == 0){
+                if(strcmp(buffer, ACK_name) == 0){
                     std::cout << "received NAME ACK" << std::endl;
                     break;
                 }
-                else if(strcmp(buffer, "LENG") == 0){
+                else if(strcmp(buffer, ACK_length) == 0){
                     std::cout << "received LENG ACK" << std::endl;
                     break;
                 }
-                else if(strcmp(buffer, "DATA") == 0)
+                else if(strcmp(buffer, ACK_data) == 0)
                     break;
+                else if(strcmp(buffer, ACK_hash) == 0){
+                    std::cout << "received HASH ACK" << std::endl;
+                    break;
+                }
             }
         }
+    }
+    inline char& get_crc(){
+        return *std::move(new char[32]);
     }
     int send(const char *name){
         strncpy(buffer, name, BUFFERS_LEN);
@@ -76,20 +89,24 @@ public:
         FILE* file_in = fopen(name, "rb");
         fseek(file_in, 0L, SEEK_END);
         unsigned int file_size = ftell(file_in);
-        char size[4];
-        memcpy(size, (void*)&file_size, 4);
-        memcpy(buffer, size, 4);
+//        char size[4];
+//        memcpy(size, (void*)&file_size, 4);
+        memcpy(buffer, (void*)&file_size, 4);
         send_datagram(4);
 
         size_t length;
         int pos = 0;
         rewind(file_in);
-        while((length = fread(&buffer[4], 1, BUFFERS_LEN - 4, file_in)) > 0) {
-            if (length+4 < sizeof(buffer)) buffer[length+4] = 0;
+        while((length = fread(&buffer[4], 1, BUFFERS_LEN - 4 - CRC_length, file_in)) > 0) {
+//            if (length+4 < sizeof(buffer)) buffer[length+4] = 0;
             memcpy((void*)&buffer, (void*)&pos, 4);
-            send_datagram(4+length);
+            send_datagram(4+length+CRC_length);
             pos += length;
         }
+
+        char MD5[] = "DUMMY MD5";
+        memcpy(buffer, MD5, strlen(MD5));
+        send_datagram(strlen(MD5));
 
         close(sockfd);
         fclose(file_in);

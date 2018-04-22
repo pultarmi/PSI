@@ -19,6 +19,12 @@
 #define TARGET_PORT 6666
 #define LOCAL_PORT 6666
 
+const char ACK_length[] = "LENG+";
+const char ACK_name[] = "NAME+";
+const char ACK_data[] = "DATA+";
+const char ACK_hash[] = "HASH+";
+const unsigned short CRC_length = 32;
+
 class Receiver {
 private:
     struct sockaddr_in local, from;
@@ -50,7 +56,7 @@ public:
         auto *file_name = new char[recv_len+1];
         strncpy(file_name, buffer, recv_len+1);
 
-        sendto(sockfd, "NAME", 4, 0, (sockaddr*)&from, sizeof(from));
+        sendto(sockfd, ACK_name, strlen(ACK_name), 0, (sockaddr*)&from, sizeof(from));
 
         return file_name;
     }
@@ -61,7 +67,7 @@ public:
         unsigned int size;
         memcpy((void *) &size, buffer, 4);
 
-        sendto(sockfd, "LENG", 4, 0, (sockaddr*)&from, sizeof(from));
+        sendto(sockfd, ACK_length, strlen(ACK_length), 0, (sockaddr*)&from, sizeof(from));
 
         return size;
     }
@@ -71,11 +77,22 @@ public:
         for (; pos < length; pos += recv_len - 4) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
 
-            sendto(sockfd, "DATA", 4, 0, (sockaddr*)&from, sizeof(from));
+            sendto(sockfd, ACK_data, strlen(ACK_data), 0, (sockaddr*)&from, sizeof(from));
 
             memcpy((void *) &pos, buffer, 4);
-            fwrite(&buffer[4], recv_len - 4, 1, file_out);
+            fwrite(&buffer[4], recv_len - 4 - CRC_length, 1, file_out);
         }
+    }
+
+    char *receive_hash(){
+        recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+        char *hash = new char[recv_len+1];
+        hash[recv_len] = 0;
+        memcpy(hash, buffer, recv_len);
+
+        sendto(sockfd, ACK_hash, strlen(ACK_hash), 0, (sockaddr*)&from, sizeof(from));
+
+        return hash;
     }
 
     void receive(){
@@ -87,6 +104,10 @@ public:
 
         FILE *file_out = fopen(file_name, "w");
         receive_data(file_out, length);
+
+        char *hash = receive_hash();
+        std::cout << "HASH: " << hash << std::endl;
+
         fclose(file_out);
     }
 };
