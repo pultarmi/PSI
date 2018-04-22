@@ -30,7 +30,7 @@ private:
     int sockfd;
     struct sockaddr_in local, addrDest;
     socklen_t fromlen;
-    char buffer[BUFFERS_LEN];
+    char buffer[BUFFERS_LEN], CRC[CRC_length];
     ssize_t recv_len;
 public:
     Sender(){
@@ -54,9 +54,17 @@ public:
         tv.tv_usec = 10000;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     }
+    inline char* count_crc(const int size){
+        return std::move(new char[32]);
+    }
     inline void send_datagram(unsigned int size){
+        if(size + CRC_length > BUFFERS_LEN)
+            throw("Too big payload, CRC cant fit");
         while(1){
-            sendto(sockfd, buffer, size, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+            count_crc(size);
+            memcpy(buffer+size, CRC, CRC_length);
+
+            sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &addrDest, &fromlen);
             if(recv_len < BUFFERS_LEN)
@@ -79,9 +87,6 @@ public:
             }
         }
     }
-    inline char& get_crc(){
-        return *std::move(new char[32]);
-    }
     int send(const char *name){
         strncpy(buffer, name, BUFFERS_LEN);
         send_datagram(strlen(buffer));
@@ -100,7 +105,7 @@ public:
         while((length = fread(&buffer[4], 1, BUFFERS_LEN - 4 - CRC_length, file_in)) > 0) {
 //            if (length+4 < sizeof(buffer)) buffer[length+4] = 0;
             memcpy((void*)&buffer, (void*)&pos, 4);
-            send_datagram(4+length+CRC_length);
+            send_datagram(4+length);
             pos += length;
         }
 

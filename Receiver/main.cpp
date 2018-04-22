@@ -19,10 +19,10 @@
 #define TARGET_PORT 6666
 #define LOCAL_PORT 6666
 
-const char ACK_length[] = "LENG+";
-const char ACK_name[] = "NAME+";
-const char ACK_data[] = "DATA+";
-const char ACK_hash[] = "HASH+";
+const char *ACK_length[] = {"LENG+", "LENG-"};
+const char *ACK_name[] = {"NAME+", "NAME-"};
+const char *ACK_data[] = {"DATA+", "DATA-"};
+const char *ACK_hash[] = {"HASH+", "HASH-"};
 const unsigned short CRC_length = 32;
 
 class Receiver {
@@ -30,9 +30,8 @@ private:
     struct sockaddr_in local, from;
     socklen_t fromlen;
     int sockfd;
-    char buffer[BUFFERS_LEN];
+    char buffer[BUFFERS_LEN], CRC[CRC_length];
     ssize_t recv_len;
-
 public:
     Receiver(){
         local.sin_family = AF_INET;
@@ -50,13 +49,33 @@ public:
         close(sockfd);
     }
 
-    char *receive_name(){
-        recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-        if (recv_len < sizeof(buffer)) buffer[recv_len] = 0;
-        auto *file_name = new char[recv_len+1];
-        strncpy(file_name, buffer, recv_len+1);
+    inline void strip_CRC(ssize_t &recv_len){
+        recv_len -= CRC_length;
+        memcpy(CRC, buffer+recv_len, CRC_length);
+        buffer[recv_len] = 0;
+    }
+    inline bool check_CRC(const unsigned int recv_len){
+        return true;
+    }
 
-        sendto(sockfd, ACK_name, strlen(ACK_name), 0, (sockaddr*)&from, sizeof(from));
+    char *receive_name(){
+        char *file_name;
+        while(1) {
+            recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+            strip_CRC(recv_len);
+            if(!check_CRC(recv_len)) {
+                sendto(sockfd, ACK_name, strlen(ACK_name[1]), 0, (sockaddr *) &from, sizeof(from));
+                continue;
+            }
+
+//            if (recv_len < sizeof(buffer)-1) buffer[recv_len] = 0;
+            file_name = new char[recv_len + 1];
+            file_name[recv_len] = 0;
+            memcpy(file_name, buffer, recv_len);
+
+            sendto(sockfd, ACK_name[0], strlen(ACK_name[0]), 0, (sockaddr *) &from, sizeof(from));
+            break;
+        }
 
         return file_name;
     }
@@ -64,10 +83,12 @@ public:
     unsigned int receive_length(){
         buffer[0] = buffer[1] = buffer[2] = buffer[3] = 0;
         recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+        strip_CRC(recv_len);
+
         unsigned int size;
         memcpy((void *) &size, buffer, 4);
 
-        sendto(sockfd, ACK_length, strlen(ACK_length), 0, (sockaddr*)&from, sizeof(from));
+        sendto(sockfd, ACK_length[0], strlen(ACK_length[0]), 0, (sockaddr*)&from, sizeof(from));
 
         return size;
     }
@@ -76,21 +97,24 @@ public:
         unsigned int pos = 0;
         for (; pos < length; pos += recv_len - 4) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+            strip_CRC(recv_len);
 
-            sendto(sockfd, ACK_data, strlen(ACK_data), 0, (sockaddr*)&from, sizeof(from));
+            sendto(sockfd, ACK_data[0], strlen(ACK_data[0]), 0, (sockaddr*)&from, sizeof(from));
 
             memcpy((void *) &pos, buffer, 4);
-            fwrite(&buffer[4], recv_len - 4 - CRC_length, 1, file_out);
+            fwrite(&buffer[4], recv_len - 4, 1, file_out);
         }
     }
 
     char *receive_hash(){
         recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+        strip_CRC(recv_len);
+
         char *hash = new char[recv_len+1];
         hash[recv_len] = 0;
         memcpy(hash, buffer, recv_len);
 
-        sendto(sockfd, ACK_hash, strlen(ACK_hash), 0, (sockaddr*)&from, sizeof(from));
+        sendto(sockfd, ACK_hash[0], strlen(ACK_hash[0]), 0, (sockaddr*)&from, sizeof(from));
 
         return hash;
     }
