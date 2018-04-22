@@ -47,7 +47,9 @@ public:
     char *receive_name(){
         recv_len = recvfrom(sockfd, buffer_rx, sizeof(buffer_rx), 0, (sockaddr *) &from, &fromlen);
         if (recv_len < sizeof(buffer_rx)) buffer_rx[recv_len] = 0;
-        return buffer_rx;
+        char *file_name = new char[recv_len+1];
+        strncpy(file_name, buffer_rx, recv_len+1);
+        return file_name;
     }
 
     unsigned int receive_length(){
