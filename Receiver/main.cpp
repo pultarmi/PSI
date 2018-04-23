@@ -60,13 +60,12 @@ public:
         return true;
     }
 
+
     char *receive_name(){
         char *file_name;
         while(1) {
             recv_len = recvfrom(sockfd, buffer_old, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-            if(recv_len == -1)
-                continue;
-            if(strncmp(buffer, buffer_old, sizeof(buffer)) == 0)
+            if(memcmp(buffer, buffer_old, sizeof(buffer)) == 0)
                 continue;
             memcpy(buffer, buffer_old, sizeof(buffer));
             strip_CRC(recv_len);
@@ -92,9 +91,7 @@ public:
         unsigned int size;
         while(1) {
             recv_len = recvfrom(sockfd, buffer_old, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-            if(recv_len == -1)
-                continue;
-            if(strncmp(buffer, buffer_old, sizeof(buffer)) == 0)
+            if(memcmp(buffer, buffer_old, sizeof(buffer)) == 0)
                 continue;
             memcpy(buffer, buffer_old, sizeof(buffer));
 
@@ -114,15 +111,17 @@ public:
         for (; pos < length; pos += recv_len - 4) {
             while(1) {
                 recv_len = recvfrom(sockfd, buffer_old, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-                if(recv_len == -1)
-                    continue;
-                if(strncmp(buffer, buffer_old, sizeof(buffer)) == 0)
-                    continue;
-                memcpy(buffer, buffer_old, sizeof(buffer));
-
                 strip_CRC(recv_len);
 
+                memcpy(buffer, ACK_data[0], strlen(ACK_data[0]));
                 sendto(sockfd, ACK_data[0], strlen(ACK_data[0]), 0, (sockaddr *) &from, sizeof(from));
+
+                if(memcmp(buffer, buffer_old, sizeof(buffer)) == 0) {
+                    continue;
+                }
+                memcpy(buffer, buffer_old, sizeof(buffer));
+
+
 
                 memcpy((void *) &pos, buffer, 4);
                 fwrite(&buffer[4], recv_len - 4, 1, file_out);
@@ -135,9 +134,7 @@ public:
         char *hash;
         while(1) {
             recv_len = recvfrom(sockfd, buffer_old, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-            if(recv_len == -1)
-                continue;
-            if(strncmp(buffer, buffer_old, sizeof(buffer)) == 0)
+            if(memcmp(buffer, buffer_old, sizeof(buffer)) == 0)
                 continue;
             memcpy(buffer, buffer_old, sizeof(buffer));
 

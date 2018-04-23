@@ -92,9 +92,12 @@ public:
             }
         }
     }
-    int send(const char *name){
+    void send_name(const char *name){
         strncpy(buffer, name, BUFFERS_LEN);
         send_datagram(strlen(buffer));
+    }
+    int send(const char *name){
+        send_name(name);
 
         FILE* file_in = fopen(name, "rb");
         fseek(file_in, 0L, SEEK_END);
