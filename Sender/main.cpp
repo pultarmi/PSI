@@ -62,9 +62,11 @@ private:
     inline void random_distort(const int size, const short crc){
         if(rand() % 200 < 5) {
             int pos = rand() % size;
-            buffer[pos] ^= 1UL << (rand() % 8);
+            buffer[pos] ^= 1UL << (rand() % 8); // modify one bit
 //            short crc_check = crc16ibm(buffer, size);
 //            std::cout << (crc != crc_check) << std::endl;
+            //assert(crc != crc_check);
+                    // assertion above FAILS, which is wrong because single error should be detected
         }
     }
     inline short count_crc(const int size){
@@ -79,7 +81,7 @@ private:
         memcpy(buffer_backup, buffer, BUFFERS_LEN);
         while(true){
             memcpy(buffer, buffer_backup, BUFFERS_LEN);
-//            random_distort(size, crc);
+            random_distort(size, crc);
 
             int rnd = rand() % 20;
             if(rnd < 2)
