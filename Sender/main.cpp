@@ -63,8 +63,8 @@ private:
         if(rand() % 200 < 5) {
             int pos = rand() % size;
             buffer[pos] ^= 1UL << (rand() % 8);
-            short crc_check = crc16ibm(buffer, size);
-            std::cout << (crc != crc_check) << std::endl;
+//            short crc_check = crc16ibm(buffer, size);
+//            std::cout << (crc != crc_check) << std::endl;
         }
     }
     inline short count_crc(const int size){
@@ -79,7 +79,7 @@ private:
         memcpy(buffer_backup, buffer, BUFFERS_LEN);
         while(true){
             memcpy(buffer, buffer_backup, BUFFERS_LEN);
-            random_distort(size, crc);
+//            random_distort(size, crc);
 
             int rnd = rand() % 20;
             if(rnd < 2)
@@ -119,7 +119,7 @@ private:
         size_t chars_read;
         int pos = 0;
         while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_length, file_in)) > 0) {
-//            MD5_Update(md5_ctx, buffer + 4, chars_read);
+            MD5_Update(&md5_ctx, buffer + 4, chars_read);
 
             memcpy(buffer, (void*)&pos, beg_flags_len);
             send_datagram(beg_flags_len+chars_read);
@@ -127,11 +127,11 @@ private:
         }
     }
     inline void send_hash(){
-//        MD5_Final((unsigned char*)buffer, md5_ctx);
-        char MD5[] = "DUMMY MD5";
+        MD5_Final((unsigned char*)buffer + beg_flags_len, &md5_ctx);
+        //char MD5[] = "DUMMY MD5";
         memcpy(buffer, flag_hash, sizeof(flag_hash[0]));
-        memcpy(buffer+beg_flags_len, MD5, strlen(MD5));
-        send_datagram(sizeof(flag_hash[0])+strlen(MD5));
+        //memcpy(buffer+beg_flags_len, MD5, strlen(MD5));
+        send_datagram(sizeof(flag_hash[0])+4);
     }
 public:
     Sender(){
@@ -155,7 +155,7 @@ public:
         tv.tv_usec = 1000;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
-//        MD5_Init(md5_ctx);
+        MD5_Init(&md5_ctx);
 
         srand(time(NULL));
     }

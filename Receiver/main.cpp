@@ -132,6 +132,7 @@ private:
                 pos_exp = pos + recv_len - beg_flags_len;
                 std::cout << "received data " << pos << ", next exp: " << pos_exp << std::endl;
                 fwrite(&buffer[beg_flags_len], recv_len - beg_flags_len, 1, file_out);
+                MD5_Update(&md5_ctx, buffer + 4, recv_len - beg_flags_len);
                 break;
             }
         } while(pos_exp < length);
@@ -155,11 +156,19 @@ private:
             memcpy(hash, buffer+beg_flags_len, recv_len);
             break;
         }
+
+        MD5_Final((unsigned char*)buffer, &md5_ctx);
+        if(memcmp(hash, buffer, 4) == 0)
+            std::cout << "Hash is OK" << std::endl;
+        if(memcmp(hash, buffer, 4) != 0)
+            std::cout << "Hash does not match" << std::endl;
+
         return hash;
     }
 public:
     Receiver(){
         local.sin_family = AF_INET;
+
         local.sin_port = htons(LOCAL_PORT);
         local.sin_addr.s_addr = INADDR_ANY;
 
@@ -169,6 +178,8 @@ public:
             return;
         }
         fromlen = sizeof(from);
+
+        MD5_Init(&md5_ctx);
     }
     ~Receiver(){
         close(sockfd);
@@ -184,7 +195,7 @@ public:
         receive_data(file_out, length);
 
         char *hash = receive_hash();
-        std::cout << "hash: " << hash << std::endl;
+//        std::cout << "hash: " << hash << std::endl;
 
         fclose(file_out);
     }
