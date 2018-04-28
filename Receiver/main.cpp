@@ -22,7 +22,30 @@
 const int flag_name[] = {-1, -2};
 const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
+const int flag_data[] = {-7, -8};
 const unsigned short CRC_length = 16;
+
+unsigned short crc16ibm(const char *sdata, size_t len){
+    const char CRCSIZE = 2; // in bytes
+    const unsigned char* data = (const unsigned char*) sdata; // maybe for ANSI
+    unsigned short pol = 0x8005; // polynomial
+    unsigned char aux = 0;
+    unsigned short crc = 0x0000; // init
+
+    for(int i = 0; i < len+CRCSIZE; ++i){
+        if (i < len) aux = data[i]; else aux = crc >> 8;
+        for(int j = 0; j < 8; ++j){
+            crc = (crc << 1) | (aux & 1);
+            if(crc & 0x8000){
+                crc ^= pol;
+            }else{
+                aux >>= 1;
+            }
+        }
+    }
+
+    return crc;
+}
 
 class Receiver {
 private:
@@ -33,6 +56,7 @@ private:
     ssize_t recv_len;
     MD5_CTX md5_ctx;
     unsigned char beg_flags_len = 4;
+    const unsigned short CRC_length = 16;
 
     inline short strip_CRC(ssize_t &recv_len){
         short crc;
@@ -40,15 +64,17 @@ private:
         memcpy((void*)&crc, buffer+recv_len, CRC_length / 8);
         return crc;
     }
-    inline bool check_CRC(short crc){
-        return true;
+    inline bool check_CRC(const short crc, const int size){
+        const short data_crc = crc16ibm(buffer, size);
+        return crc == data_crc;
+//        return true;
     }
     char *receive_name(){
         char *file_name = nullptr;
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-            if(!check_CRC(strip_CRC(recv_len))) {
-//                sendto(sockfd, ACK_name, strlen(ACK_name[1]), 0, (sockaddr *) &from, sizeof(from));
+            if(!check_CRC(strip_CRC(recv_len), recv_len - CRC_length)) {
+                sendto(sockfd, flag_name, sizeof(flag_name[1]), 0, (sockaddr *) &from, sizeof(from));
                 continue;
             }
             sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
@@ -66,8 +92,8 @@ private:
         int size;
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-            if(!check_CRC(strip_CRC(recv_len))) {
-//                sendto(sockfd, ACK_name, strlen(ACK_length[1]), 0, (sockaddr *) &from, sizeof(from));
+            if(!check_CRC(strip_CRC(recv_len), recv_len - CRC_length)) {
+                sendto(sockfd, flag_length, sizeof(flag_length[1]), 0, (sockaddr *) &from, sizeof(from));
                 continue;
             }
             sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
@@ -81,32 +107,41 @@ private:
         return size;
     }
     void receive_data(FILE *file_out, int length){
-        int pos = 0, pos_prev = -1;
-        for (; pos < length; pos += recv_len - 4) {
+        int pos = 0, pos_prev = -(BUFFERS_LEN - beg_flags_len - CRC_length), pos_exp = 0;
+        do{
             while(true) {
                 recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-                if(!check_CRC(strip_CRC(recv_len))) {
-//                    sendto(sockfd, ACK_name, strlen(ACK_data[1]), 0, (sockaddr *) &from, sizeof(from));
+                if(!check_CRC(strip_CRC(recv_len), recv_len - CRC_length)) {
+                    sendto(sockfd, flag_data, sizeof(flag_data[1]), 0, (sockaddr *) &from, sizeof(from));
+                    std::cout << "wrong CRC" << std::endl;
                     continue;
                 }
+                memcpy((void*)&pos, buffer, beg_flags_len);
+
+                if(pos == flag_length[0]){
+                    sendto(sockfd, flag_length, sizeof(flag_length[1]), 0, (sockaddr *) &from, sizeof(from));
+                    continue;
+                }
+                if(pos < 0 || pos == pos_prev || pos != pos_prev + BUFFERS_LEN - beg_flags_len - CRC_length)
+                    continue;
+
                 sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
 
-                memcpy((void*)&pos, buffer, beg_flags_len);
-                if(pos < 0 || pos == pos_prev)
-                    continue;
                 pos_prev = pos;
 
-                fwrite(&buffer[4], recv_len - 4, 1, file_out);
+                pos_exp = pos + recv_len - beg_flags_len;
+                std::cout << "received data " << pos << ", next exp: " << pos_exp << std::endl;
+                fwrite(&buffer[beg_flags_len], recv_len - beg_flags_len, 1, file_out);
                 break;
             }
-        }
+        } while(pos_exp < length);
     }
     char *receive_hash(){
         char *hash;
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-            if(!check_CRC(strip_CRC(recv_len))) {
-//                    sendto(sockfd, ACK_name, strlen(ACK_data[1]), 0, (sockaddr *) &from, sizeof(from));
+            if(!check_CRC(strip_CRC(recv_len), recv_len - CRC_length)) {
+                sendto(sockfd, flag_hash, sizeof(flag_hash[1]), 0, (sockaddr *) &from, sizeof(from));
                 continue;
             }
             sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));

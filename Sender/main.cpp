@@ -25,29 +25,63 @@
 const int flag_name[] = {-1, -2};
 const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
+const int flag_data[] = {-7, -8};
 
-const unsigned short CRC_length = 16;
+unsigned short crc16ibm(const char *sdata, size_t len){
+    const char CRCSIZE = 2; // in bytes
+    const unsigned char* data = (const unsigned char*) sdata; // maybe for ANSI
+    unsigned short pol = 0x8005; // polynomial
+    unsigned char aux = 0;
+    unsigned short crc = 0x0000; // init
+
+    for(int i = 0; i < len+CRCSIZE; ++i){
+        if (i < len) aux = data[i]; else aux = crc >> 8;
+        for(int j = 0; j < 8; ++j){
+            crc = (crc << 1) | (aux & 1);
+            if(crc & 0x8000){
+                crc ^= pol;
+            }else{
+                aux >>= 1;
+            }
+        }
+    }
+    return crc;
+}
 
 class Sender{
 private:
     int sockfd;
     struct sockaddr_in local, addrDest;
     socklen_t fromlen;
-    char buffer[BUFFERS_LEN];
-    ssize_t recv_len;
+    char buffer[BUFFERS_LEN], buffer_backup[BUFFERS_LEN];
+//    ssize_t recv_len;
     MD5_CTX md5_ctx;
     unsigned int beg_flags_len = 4;
+    const unsigned short CRC_length = 16;
 
+    inline void random_distort(const int size, const short crc){
+        if(rand() % 200 < 5) {
+            int pos = rand() % size;
+            buffer[pos] ^= 1UL << (rand() % 8);
+            short crc_check = crc16ibm(buffer, size);
+            std::cout << (crc != crc_check) << std::endl;
+        }
+    }
     inline short count_crc(const int size){
-        return 0;
+        return crc16ibm(buffer, size);
     }
     inline void send_datagram(unsigned int size){
         assert(size + CRC_length <= BUFFERS_LEN);
-        while(true){
-            short crc = count_crc(size);
-            memcpy(buffer+size, (void*)&crc, CRC_length);
 
-            int rnd = random() % 20;
+        short crc = count_crc(size);
+        memcpy(buffer+size, (void*)&crc, CRC_length);
+
+        memcpy(buffer_backup, buffer, BUFFERS_LEN);
+        while(true){
+            memcpy(buffer, buffer_backup, BUFFERS_LEN);
+            random_distort(size, crc);
+
+            int rnd = rand() % 20;
             if(rnd < 2)
                 sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
             if(rnd < 6)
@@ -56,7 +90,7 @@ private:
                 sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 
             while(recvfrom(sockfd, buffer+beg_flags_len, sizeof(buffer)-beg_flags_len, 0, (sockaddr *) &addrDest, &fromlen) != -1){
-                if(memcmp(buffer+beg_flags_len, buffer, beg_flags_len) == 0) {
+                if(memcmp(buffer+beg_flags_len, buffer_backup, beg_flags_len) == 0) {
                     if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0)
                         std::cout << "received NAME ACK" << std::endl;
                     else if (memcmp(buffer, flag_length, sizeof(flag_length[0])) == 0)
