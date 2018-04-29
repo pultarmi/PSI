@@ -47,6 +47,43 @@ unsigned short crc16ibm(const char *sdata, size_t len){
     return crc;
 }
 
+
+#define		CRC_START_16		0x0000
+#define		CRC_POLY_16		0xA001
+static void             init_crc16_tab( void );
+static bool             crc_tab16_init          = false;
+static uint16_t         crc_tab16[256];
+static void init_crc16_tab( void ) {
+    uint16_t i;
+    uint16_t j;
+    uint16_t crc;
+    uint16_t c;
+    for (i=0; i<256; i++) {
+        crc = 0;
+        c = i;
+        for (j = 0; j < 8; j++) {
+            if ((crc ^ c) & 0x0001) crc = (crc >> 1) ^ CRC_POLY_16;
+            else crc = crc >> 1;
+            c = c >> 1;
+        }
+        crc_tab16[i] = crc;
+    }
+    crc_tab16_init = true;
+}  /* init_crc16_tab */
+uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
+    uint16_t crc;
+    const unsigned char *ptr;
+    size_t a;
+    if ( ! crc_tab16_init ) init_crc16_tab();
+    crc = CRC_START_16;
+    ptr = input_str;
+    if ( ptr != NULL ) for (a=0; a<num_bytes; a++) {
+            crc = (crc >> 8) ^ crc_tab16[ (crc ^ (uint16_t) *ptr++) & 0x00FF ];
+        }
+    return crc;
+}  /* crc_16 */
+
+
 class Receiver {
 private:
     struct sockaddr_in local, from;
@@ -64,8 +101,12 @@ private:
         memcpy((void*)&crc, buffer+recv_len, CRC_length / 8);
         return crc;
     }
+    short count_crc(const int size){
+//        return crc16ibm(buffer, size);
+        return crc_16((unsigned char*)buffer, size);
+    }
     inline bool check_CRC(const short crc, const int size){
-        const short data_crc = crc16ibm(buffer, size);
+        const short data_crc = count_crc(size);
         return crc == data_crc;
 //        return true;
     }
