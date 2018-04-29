@@ -14,12 +14,13 @@
 #include <cstdlib>
 #include <openssl/md5.h>
 
+#define TARGET_IP	"192.168.0.157"
 //#define TARGET_IP "192.168.43.138"
-#define TARGET_IP	"192.168.0.129"
+//#define TARGET_IP	"192.168.0.129"
 //#define TARGET_IP	"192.168.43.10"
 #define BUFFERS_LEN 1024
 
-#define TARGET_PORT 6666
+#define TARGET_PORT 8998
 #define LOCAL_PORT 5555
 
 const int flag_name[] = {-1, -2};
@@ -54,7 +55,6 @@ private:
     struct sockaddr_in local, addrDest;
     socklen_t fromlen;
     char buffer[BUFFERS_LEN], buffer_backup[BUFFERS_LEN];
-//    ssize_t recv_len;
     MD5_CTX md5_ctx;
     unsigned int beg_flags_len = 4;
     const unsigned short CRC_length = 16;
@@ -84,11 +84,11 @@ private:
             random_distort(size, crc);
 
             int rnd = rand() % 20;
-            if(rnd < 2)
-                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-            if(rnd < 6)
-                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-            if(rnd < 15)
+//            if(rnd < 2)
+//                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+//            if(rnd < 6)
+//                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+//            if(rnd < 15)
                 sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 
             while(recvfrom(sockfd, buffer+beg_flags_len, sizeof(buffer)-beg_flags_len, 0, (sockaddr *) &addrDest, &fromlen) != -1){
@@ -120,19 +120,21 @@ private:
     inline void send_data(FILE* file_in){
         size_t chars_read;
         int pos = 0;
+        std::cout << "Sending data";
         while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_length, file_in)) > 0) {
             MD5_Update(&md5_ctx, buffer + 4, chars_read);
 
             memcpy(buffer, (void*)&pos, beg_flags_len);
             send_datagram(beg_flags_len+chars_read);
             pos += chars_read;
+            std::cout << ".";
+            std::flush(std::cout);
         }
+        std::cout << std::endl;
     }
     inline void send_hash(){
         MD5_Final((unsigned char*)buffer + beg_flags_len, &md5_ctx);
-        //char MD5[] = "DUMMY MD5";
         memcpy(buffer, flag_hash, sizeof(flag_hash[0]));
-        //memcpy(buffer+beg_flags_len, MD5, strlen(MD5));
         send_datagram(sizeof(flag_hash[0])+4);
     }
 public:
@@ -175,9 +177,25 @@ public:
 int main(int argc, char** argv) {
     Sender sender;
     if(argc < 2){
-        std::cout << "please provide filename" << std::endl;
+        std::cout << "please provide relative path" << std::endl;
         return 1;
     }
     sender.send(argv[1]);
+
+
+//    char c[600];
+//    for(int i=0; i < sizeof(c); i++)
+//        c[i] = 0b11111111;
+//    char cb[600];
+//
+//    memcpy(cb, c, sizeof(c));
+//    cb[2] ^= 1UL << 6;
+//    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
+//    memcpy(cb, c, 3);
+//    cb[2] ^= 1UL << 7;
+//    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
+//    memcpy(cb, c, 3);
+//    cb[2] ^= 1UL << 0;
+//    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
     return 0;
 }
