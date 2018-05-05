@@ -14,14 +14,22 @@
 #include <cstdlib>
 #include <openssl/md5.h>
 
-#define TARGET_IP	"192.168.0.157"
-//#define TARGET_IP "192.168.43.138"
+/*
+//#define TARGET_IP	"192.168.0.157"
+#define TARGET_IP "192.168.43.138"
 //#define TARGET_IP	"192.168.0.129"
 //#define TARGET_IP	"192.168.43.10"
+*/
+
 #define BUFFERS_LEN 1024
 
 #define TARGET_PORT 6666
 #define LOCAL_PORT 5555
+
+#define SENDRATE 20
+#define SENDRATEMOD 100
+
+//TODO selective repeat
 
 const int flag_name[] = {-1, -2};
 const int flag_length[] = {-3, -4};
@@ -35,7 +43,7 @@ unsigned short crc16ibm(const char *sdata, size_t len){
     unsigned char aux = 0;
     unsigned short crc = 0x0000; // init
 
-    for(int i = 0; i < len+CRCSIZE; ++i){
+    for(unsigned int i = 0; i < len+CRCSIZE; ++i){
         if (i < len) aux = data[i]; else aux = crc >> 8;
         for(int j = 0; j < 8; ++j){
             crc = (crc << 1) | (aux & 1);
@@ -50,12 +58,11 @@ unsigned short crc16ibm(const char *sdata, size_t len){
 }
 
 
-#define		CRC_START_16		0x0000
-#define		CRC_POLY_16		0xA001
-static void             init_crc16_tab( void );
-static bool             crc_tab16_init          = false;
-static uint16_t         crc_tab16[256];
-static void init_crc16_tab( void ) {
+#define	CRC_START_16 0x0000
+#define	CRC_POLY_16	0xA001
+static bool crc_tab16_init = false;
+static uint16_t crc_tab16[256];
+static void init_crc16_tab(void) {
     uint16_t i;
     uint16_t j;
     uint16_t crc;
@@ -72,15 +79,16 @@ static void init_crc16_tab( void ) {
     }
     crc_tab16_init = true;
 }  /* init_crc16_tab */
+
 uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
     uint16_t crc;
     const unsigned char *ptr;
     size_t a;
-    if ( ! crc_tab16_init ) init_crc16_tab();
+    if (!crc_tab16_init) init_crc16_tab();
     crc = CRC_START_16;
     ptr = input_str;
-    if ( ptr != NULL ) for (a=0; a<num_bytes; a++) {
-            crc = (crc >> 8) ^ crc_tab16[ (crc ^ (uint16_t) *ptr++) & 0x00FF ];
+    if (ptr != NULL) for (a=0; a<num_bytes; a++) {
+            crc = (crc >> 8) ^ crc_tab16[(crc ^ (uint16_t) *ptr++) & 0x00FF ];
         }
     return crc;
 }  /* crc_16 */
@@ -92,23 +100,25 @@ private:
     socklen_t fromlen;
     char buffer[BUFFERS_LEN], buffer_backup[BUFFERS_LEN];
     MD5_CTX md5_ctx;
-    unsigned int beg_flags_len = 4;
-    const unsigned short CRC_length = 16;
+    static const unsigned int beg_flags_len = 4;
+    static const unsigned short CRC_length = 16;
 
     inline void random_distort(const int size, const short crc){
         if(rand() % 200 < 5) {
             int pos = rand() % size;
             buffer[pos] ^= 1UL << (rand() % 8); // modify one bit
-//            short crc_check = crc16ibm(buffer, size);
-//            std::cout << (crc != crc_check) << std::endl;
+            //short crc_check = crc16ibm(buffer, size);
+            //std::cout << (crc != crc_check) << std::endl;
             //assert(crc != crc_check);
-                    // assertion above FAILS, which is wrong because single error should be detected
+            // assertion above FAILS, which is wrong because single error should be detected
         }
     }
+
     inline short count_crc(const int size){
-//        return crc16ibm(buffer, size);
+        //return crc16ibm(buffer, size);
         return crc_16((unsigned char*)buffer, size);
     }
+
     inline void send_datagram(unsigned int size){
         assert(size + CRC_length <= BUFFERS_LEN);
 
@@ -120,13 +130,8 @@ private:
             memcpy(buffer, buffer_backup, BUFFERS_LEN);
             random_distort(size, crc);
 
-            int rnd = rand() % 20;
-//            if(rnd < 2)
-//                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-//            if(rnd < 6)
-//                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-//            if(rnd < 15)
-                sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+            int rnd = rand() % SENDRATEMOD;
+            if(rnd < SENDRATE) sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 
             while(recvfrom(sockfd, buffer+beg_flags_len, sizeof(buffer)-beg_flags_len, 0, (sockaddr *) &addrDest, &fromlen) != -1){
                 if(memcmp(buffer+beg_flags_len, buffer_backup, beg_flags_len) == 0) {
@@ -141,11 +146,13 @@ private:
             }
         }
     }
+
     inline void send_name(const char *name){
         memcpy(buffer, (void*)&flag_name, sizeof(flag_name[0]));
         memcpy(buffer+sizeof(flag_name[0]), name, BUFFERS_LEN);
         send_datagram(sizeof(flag_name[0])+strlen(name));
     }
+
     inline void send_length(FILE* file_in){
         fseek(file_in, 0L, SEEK_END);
         long file_size = ftell(file_in);
@@ -154,9 +161,13 @@ private:
         send_datagram(sizeof(flag_length[0])+sizeof(long));
         rewind(file_in);
     }
-    inline void send_data(FILE* file_in){
+
+    inline void send_data(FILE* file_in, unsigned int maxrate){
         size_t chars_read;
         int pos = 0;
+        clock_t oldclock = clock(); // used for flow control
+        clock_t newclock = clock();
+        unsigned int sent = 0;
         std::cout << "Sending data";
         while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_length, file_in)) > 0) {
             MD5_Update(&md5_ctx, buffer + 4, chars_read);
@@ -166,16 +177,27 @@ private:
             pos += chars_read;
             std::cout << ".";
             std::flush(std::cout);
+
+            ++sent;
+            newclock = clock();
+            if ((newclock - oldclock) < (maxrate*CLOCKS_PER_SEC) && maxrate != 0){
+                usleep(CLOCKS_PER_SEC - newclock + oldclock);
+                // assuming CLOCKS_PER_SEC to be 1000000
+            }
+            oldclock = clock();
+
         }
         std::cout << std::endl;
     }
+
     inline void send_hash(){
         MD5_Final((unsigned char*)buffer + beg_flags_len, &md5_ctx);
         memcpy(buffer, flag_hash, sizeof(flag_hash[0]));
         send_datagram(sizeof(flag_hash[0])+4);
     }
+
 public:
-    Sender(){
+    Sender(char* target_ip){
         local.sin_family = AF_INET;
         local.sin_port = htons(LOCAL_PORT);
         local.sin_addr.s_addr = INADDR_ANY;
@@ -189,7 +211,7 @@ public:
 
         addrDest.sin_family = AF_INET;
         addrDest.sin_port = htons(TARGET_PORT);
-        inet_pton(AF_INET, TARGET_IP, &addrDest.sin_addr.s_addr);
+        inet_pton(AF_INET, target_ip, &addrDest.sin_addr.s_addr);
 
         struct timeval tv;
         tv.tv_sec = 0;
@@ -200,25 +222,28 @@ public:
 
         srand(time(NULL));
     }
-    int send(const char *name){
+
+    void send(const char *name, int maxrate){
         send_name(name);
         FILE* file_in = fopen(name, "rb");
         send_length(file_in);
-        send_data(file_in);
+        send_data(file_in, maxrate);
         send_hash();
         close(sockfd);
         fclose(file_in);
     }
 };
 
+
 int main(int argc, char** argv) {
-    Sender sender;
-    if(argc < 2){
-        std::cout << "please provide relative path" << std::endl;
+    if(argc < 3){
+        std::cout << "Usage: ./" << argv[0] << " <Target IP> <Relative Path> <Maximum Packet Rate>" << std::endl;
         return 1;
     }
-    sender.send(argv[1]);
-
+    Sender sender(argv[1]);
+    unsigned int maxrate = 0;
+    if(argc > 3) maxrate = atoi(argv[3]);
+    sender.send(argv[2], maxrate);
 
 //    char c[600];
 //    for(int i=0; i < sizeof(c); i++)
@@ -234,5 +259,6 @@ int main(int argc, char** argv) {
 //    memcpy(cb, c, 3);
 //    cb[2] ^= 1UL << 0;
 //    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
+
     return 0;
 }
