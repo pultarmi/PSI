@@ -36,28 +36,6 @@ const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
 const int flag_data[] = {-7, -8};
 
-unsigned short crc16ibm(const char *sdata, size_t len){
-    const char CRCSIZE = 2; // in bytes
-    const unsigned char* data = (const unsigned char*) sdata; // maybe for ANSI
-    unsigned short pol = 0x8005; // polynomial
-    unsigned char aux = 0;
-    unsigned short crc = 0x0000; // init
-
-    for(unsigned int i = 0; i < len+CRCSIZE; ++i){
-        if (i < len) aux = data[i]; else aux = crc >> 8;
-        for(int j = 0; j < 8; ++j){
-            crc = (crc << 1) | (aux & 1);
-            if(crc & 0x8000){
-                crc ^= pol;
-            }else{
-                aux >>= 1;
-            }
-        }
-    }
-    return crc;
-}
-
-
 #define	CRC_START_16 0x0000
 #define	CRC_POLY_16	0xA001
 static bool crc_tab16_init = false;
@@ -102,20 +80,16 @@ private:
     MD5_CTX md5_ctx;
     static const unsigned int beg_flags_len = 4;
     static const unsigned short CRC_length = 16;
+    unsigned int recv_max_rate;
 
     inline void random_distort(const int size, const short crc){
         if(rand() % 200 < 5) {
             int pos = rand() % size;
             buffer[pos] ^= 1UL << (rand() % 8); // modify one bit
-            //short crc_check = crc16ibm(buffer, size);
-            //std::cout << (crc != crc_check) << std::endl;
-            //assert(crc != crc_check);
-            // assertion above FAILS, which is wrong because single error should be detected
         }
     }
 
     inline short count_crc(const int size){
-        //return crc16ibm(buffer, size);
         return crc_16((unsigned char*)buffer, size);
     }
 
@@ -135,8 +109,11 @@ private:
 
             while(recvfrom(sockfd, buffer+beg_flags_len, sizeof(buffer)-beg_flags_len, 0, (sockaddr *) &addrDest, &fromlen) != -1){
                 if(memcmp(buffer+beg_flags_len, buffer_backup, beg_flags_len) == 0) {
-                    if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0)
+                    if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
                         std::cout << "received NAME ACK" << std::endl;
+                        memcpy((void*)&recv_max_rate, buffer+beg_flags_len+4, 4);
+                        std::cout << "received rate " << recv_max_rate << " packets/s" << std::endl;
+                    }
                     else if (memcmp(buffer, flag_length, sizeof(flag_length[0])) == 0)
                         std::cout << "received LENG ACK" << std::endl;
                     else if (memcmp(buffer, flag_hash, sizeof(flag_hash[0])) == 0)
@@ -163,6 +140,9 @@ private:
     }
 
     inline void send_data(FILE* file_in, unsigned int maxrate){
+        maxrate = std::min(maxrate, recv_max_rate);
+        std::cout << "using rate " << maxrate << " packets/s" << std::endl;
+
         size_t chars_read;
         int pos = 0;
         clock_t oldclock = clock(); // used for flow control
@@ -180,8 +160,14 @@ private:
 
             ++sent;
             newclock = clock();
-            if ((newclock - oldclock) < (maxrate*CLOCKS_PER_SEC) && maxrate != 0){
-                usleep(CLOCKS_PER_SEC - newclock + oldclock);
+//            std::cout << "interval " << ((1/(double)maxrate)*CLOCKS_PER_SEC) << std::endl;
+            unsigned int int_length = (1/(double)maxrate)*CLOCKS_PER_SEC;
+            if ((newclock - oldclock) < int_length && maxrate != 0){
+//                usleep(CLOCKS_PER_SEC - newclock + oldclock);
+                unsigned int remaining_clocks_to_wait = (int_length - (newclock - oldclock));
+                unsigned int mics_to_wait = (double)1000000*remaining_clocks_to_wait / ((double)CLOCKS_PER_SEC);
+//                std::cout << mics_to_wait << std::endl;
+                usleep(mics_to_wait);
                 // assuming CLOCKS_PER_SEC to be 1000000
             }
             oldclock = clock();
@@ -244,21 +230,6 @@ int main(int argc, char** argv) {
     unsigned int maxrate = 0;
     if(argc > 3) maxrate = atoi(argv[3]);
     sender.send(argv[2], maxrate);
-
-//    char c[600];
-//    for(int i=0; i < sizeof(c); i++)
-//        c[i] = 0b11111111;
-//    char cb[600];
-//
-//    memcpy(cb, c, sizeof(c));
-//    cb[2] ^= 1UL << 6;
-//    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
-//    memcpy(cb, c, 3);
-//    cb[2] ^= 1UL << 7;
-//    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
-//    memcpy(cb, c, 3);
-//    cb[2] ^= 1UL << 0;
-//    std::cout << (crc16ibm(c, sizeof(c)) != crc16ibm(cb, sizeof(cb))) << std::endl;
 
     return 0;
 }

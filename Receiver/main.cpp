@@ -25,29 +25,6 @@ const int flag_hash[] = {-5, -6};
 const int flag_data[] = {-7, -8};
 const unsigned short CRC_length = 16;
 
-unsigned short crc16ibm(const char *sdata, size_t len){
-    const char CRCSIZE = 2; // in bytes
-    const unsigned char* data = (const unsigned char*) sdata; // maybe for ANSI
-    unsigned short pol = 0x8005; // polynomial
-    unsigned char aux = 0;
-    unsigned short crc = 0x0000; // init
-
-    for(int i = 0; i < len+CRCSIZE; ++i){
-        if (i < len) aux = data[i]; else aux = crc >> 8;
-        for(int j = 0; j < 8; ++j){
-            crc = (crc << 1) | (aux & 1);
-            if(crc & 0x8000){
-                crc ^= pol;
-            }else{
-                aux >>= 1;
-            }
-        }
-    }
-
-    return crc;
-}
-
-
 #define		CRC_START_16		0x0000
 #define		CRC_POLY_16		0xA001
 static void             init_crc16_tab( void );
@@ -102,15 +79,13 @@ private:
         return crc;
     }
     short count_crc(const int size){
-//        return crc16ibm(buffer, size);
         return crc_16((unsigned char*)buffer, size);
     }
     inline bool check_CRC(const short crc, const int size){
         const short data_crc = count_crc(size);
         return crc == data_crc;
-//        return true;
     }
-    char *receive_name(){
+    char *receive_name(unsigned int recv_max_rate){
         char *file_name = nullptr;
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
@@ -119,12 +94,13 @@ private:
                 sendto(sockfd, flag_name, sizeof(flag_name[1]), 0, (sockaddr *) &from, sizeof(from));
                 continue;
             }
-            sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
-
             recv_len -= beg_flags_len;
             file_name = new char[recv_len + 1];
             file_name[recv_len] = 0;
             memcpy(file_name, buffer+beg_flags_len, recv_len);
+
+            memcpy(buffer+4, (void*)&recv_max_rate, 4);
+            sendto(sockfd, buffer, beg_flags_len + 4, 0, (sockaddr *) &from, sizeof(from));
 
             break;
         }
@@ -231,8 +207,8 @@ public:
     ~Receiver(){
         close(sockfd);
     }
-    void receive(){
-        char *file_name = receive_name();
+    void receive(unsigned int recv_max_rate){
+        char *file_name = receive_name(recv_max_rate);
         std::cout << "name " << file_name << std::endl;
 
         int length = receive_length();
@@ -242,7 +218,6 @@ public:
         receive_data(file_out, length);
 
         char *hash = receive_hash();
-//        std::cout << "hash: " << hash << std::endl;
 
         fclose(file_out);
     }
@@ -250,6 +225,9 @@ public:
 
 int main(int argc, char** argv) {
     Receiver receiver;
-    receiver.receive();
+    if(argc > 1) {
+        receiver.receive(atoi(argv[1]));
+    }
+    else receiver.receive(INT32_MAX);
     return 0;
 }
