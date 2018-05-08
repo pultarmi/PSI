@@ -97,17 +97,25 @@ private:
         assert(size + CRC_length <= BUFFERS_LEN);
 
         short crc = count_crc(size);
+        //append crc to the end
         memcpy(buffer+size, (void*)&crc, CRC_length);
 
+        // backup_buffer before the distortion
         memcpy(buffer_backup, buffer, BUFFERS_LEN);
         while(true){
+            //restore backup
             memcpy(buffer, buffer_backup, BUFFERS_LEN);
+            // randomly change one bit
             random_distort(size, crc);
 
+            // randomly forget to send
             int rnd = rand() % SENDRATEMOD;
             if(rnd < SENDRATE) sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 
+            // receive response
             while(recvfrom(sockfd, buffer+beg_flags_len, sizeof(buffer)-beg_flags_len, 0, (sockaddr *) &addrDest, &fromlen) != -1){
+                // whether response matches the sent flag (or position in case of data sending)
+                // save the received flags to the position behind the sent flags
                 if(memcmp(buffer+beg_flags_len, buffer_backup, beg_flags_len) == 0) {
                     if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
                         std::cout << "received NAME ACK" << std::endl;
@@ -132,9 +140,13 @@ private:
 
     inline void send_length(FILE* file_in){
         fseek(file_in, 0L, SEEK_END);
+        //get size of the file
         long file_size = ftell(file_in);
+        // copy length flag to the beggining of the buffer
         memcpy(buffer, (void*)&flag_length, sizeof(flag_length[0]));
+        // copy the length behind the flags
         memcpy(buffer+sizeof(flag_length[0]), (void*)&file_size, sizeof(long));
+        // send the buffer
         send_datagram(sizeof(flag_length[0])+sizeof(long));
         rewind(file_in);
     }
