@@ -166,7 +166,7 @@ private:
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
             short crc = strip_CRC(recv_len);
             if( !check_CRC(crc, recv_len) || memcmp(buffer, flag_hash, beg_flags_len) != 0 ) {
-                sendto(sockfd, flag_hash+1, sizeof(flag_hash[1]), 0, (sockaddr *) &from, sizeof(from));
+                sendto( sockfd, flag_hash+1, sizeof(flag_hash[1]), 0, (sockaddr *) &from, sizeof(from) );
                 continue;
             }
             sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
@@ -189,8 +189,9 @@ private:
         MD5_Final((unsigned char*)buffer, &md5_ctx);
         if(memcmp(hash, buffer, 4) == 0)
             std::cout << "Hash is OK" << std::endl;
-        if(memcmp(hash, buffer, 4) != 0)
-            std::cout << "Hash does not match" << std::endl;
+        else std::cout << "Hash does not match" << std::endl;
+//        if(memcmp(hash, buffer, 4) != 0)
+//            std::cout << "Hash does not match" << std::endl;
         return hash;
     }
 public:
@@ -223,7 +224,7 @@ public:
         lseek (fd_out, length-1, SEEK_SET);
         if(write (fd_out, "1", 1) == -1) throw("sth really bad");
         lseek (fd_out, 0, SEEK_SET);
-        unsigned char *mapped_output = (unsigned char*)mmap(nullptr, length, PROT_WRITE, MAP_SHARED, fd_out, 0);
+        unsigned char *mapped_output = (unsigned char*)mmap(NULL, length, PROT_WRITE, MAP_SHARED, fd_out, 0);
         receive_data(mapped_output, length);
 
         char *hash = receive_hash(mapped_output, length);
@@ -234,9 +235,8 @@ public:
 
 int main(int argc, char** argv) {
     Receiver receiver;
-    if(argc > 1) {
+    if(argc > 1)
         receiver.receive(atoi(argv[1]));
-    }
     else receiver.receive(INT32_MAX);
     return 0;
 }

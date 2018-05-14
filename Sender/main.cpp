@@ -86,8 +86,9 @@ private:
     static const unsigned int beg_flags_len = 4;
     static const unsigned short CRC_LEN_bits = 16;
     static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
-    unsigned int recv_max_rate;
+    unsigned int glob_max_rate;
     std::deque<Packet> sent_packets;
+    clock_t oldclock;
 
     inline void random_distort(char *buffer, const int size){
         if(rand() % 200 < 5) {
@@ -99,6 +100,7 @@ private:
     inline short count_crc(char *buffer, const int size){
         return crc_16((unsigned char*)buffer, size);
     }
+
 
     inline void recv_acks(){
         char buffer[BUFFERS_LEN];
@@ -115,8 +117,10 @@ private:
 
                     if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
                         std::cout << "received NAME ACK" << std::endl;
+                        unsigned int recv_max_rate;
                         memcpy((void *) &recv_max_rate, buffer + beg_flags_len, 4);
                         std::cout << "received rate " << recv_max_rate << " packets/s" << std::endl;
+                        glob_max_rate = std::min(recv_max_rate, glob_max_rate);
                     } else if (memcmp(buffer, flag_length, sizeof(flag_length[0])) == 0)
                         std::cout << "received LENG ACK" << std::endl;
                     else if (memcmp(buffer, flag_hash, sizeof(flag_hash[0])) == 0)
@@ -128,11 +132,28 @@ private:
         }
     }
 
+    inline void send_with_rate(char *buffer, int size){
+        clock_t newclock;
+
+        newclock = clock();
+        unsigned int int_length = (1/(double)glob_max_rate)*CLOCKS_PER_SEC;
+        if ( (newclock - oldclock) < int_length ){
+            unsigned int remaining_clocks_to_wait = (int_length - (newclock - oldclock));
+            unsigned int mics_to_wait = (double)1000000*remaining_clocks_to_wait / ((double)CLOCKS_PER_SEC);
+            usleep(mics_to_wait);
+            // assuming CLOCKS_PER_SEC to be 1000000
+        }
+        oldclock = clock();
+
+        sendto(sockfd, buffer, size, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+    }
+
     inline void wait_till_sent_num_at_max(int threshold){
         if(sent_packets.size() == WINDOW_SIZE)
             std::cout << "Wfull" << std::endl;
         while (sent_packets.size() > threshold) {
-            sendto(sockfd, sent_packets.front().data, sent_packets.front().size, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+//            sendto(sockfd, sent_packets.front().data, sent_packets.front().size, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+            send_with_rate( sent_packets.front().data, sent_packets.front().size );
             recv_acks();
         }
     }
@@ -148,7 +169,9 @@ private:
             memcpy(buffer+beg_flags_len, (void*)&crc, CRC_LEN_bytes);
             std::cout << "signaling end" << std::endl;
             sent_packets.emplace_back(Packet(flag_end[0], beg_flags_len+CRC_LEN_bytes, buffer));
-            sendto(sockfd, buffer, beg_flags_len+CRC_LEN_bytes, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+//            sendto(sockfd, buffer, beg_flags_len+CRC_LEN_bytes, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+
+            send_with_rate( buffer, beg_flags_len+CRC_LEN_bytes );
 
             wait_till_sent_num_at_max(0);
         }
@@ -180,7 +203,8 @@ private:
         int rnd = rand() % SENDRATEMOD;
         if(rnd < SENDRATE) {
             std::flush(std::cout);
-            sendto(sockfd, buffer, size + CRC_LEN_bytes, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+//            sendto(sockfd, buffer, size + CRC_LEN_bytes, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+            send_with_rate( buffer, size + CRC_LEN_bytes );
         }
 
         std::flush(std::cout);
@@ -218,7 +242,7 @@ private:
 
         char buffer[BUFFERS_LEN];
         while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_LEN_bytes, file_in)) > 0) {
-            maxrate = std::min(maxrate, recv_max_rate);
+//            maxrate = std::min(maxrate, recv_max_rate);
 
             MD5_Update(&md5_ctx, buffer + 4, chars_read);
 
@@ -277,6 +301,9 @@ public:
     }
 
     void send(const char *name, int maxrate){
+        glob_max_rate = maxrate;
+        oldclock = clock(); // used for flow control
+
         send_name(name);
         finalize_sending();
         FILE* file_in = fopen(name, "rb");
