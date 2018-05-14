@@ -12,6 +12,7 @@
 #include <cassert>
 #include <ctime>
 #include <cstdlib>
+#include <deque>
 #include <openssl/md5.h>
 
 /*
@@ -28,13 +29,14 @@
 
 #define SENDRATE 20
 #define SENDRATEMOD 100
+#define WINDOW_SIZE 8
 
 //TODO selective repeat
 
 const int flag_name[] = {-1, -2};
 const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
-const int flag_data[] = {-7, -8};
+//const int flag_data[] = {-7, -8};
 
 #define	CRC_START_16 0x0000
 #define	CRC_POLY_16	0xA001
@@ -56,7 +58,7 @@ static void init_crc16_tab(void) {
         crc_tab16[i] = crc;
     }
     crc_tab16_init = true;
-}  /* init_crc16_tab */
+}
 
 uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
     uint16_t crc;
@@ -69,85 +71,125 @@ uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
             crc = (crc >> 8) ^ crc_tab16[(crc ^ (uint16_t) *ptr++) & 0x00FF ];
         }
     return crc;
-}  /* crc_16 */
+}
+
+class Packet{
+public:
+    int flag, size;
+    char data[BUFFERS_LEN];
+    Packet(int flag, int size, char *data){
+        this->flag = flag;
+        this->size = size;
+        for(int i=0; i < size; i++)
+            this->data[i] = data[i];
+    }
+};
 
 class Sender{
 private:
     int sockfd;
     struct sockaddr_in local, addrDest;
     socklen_t fromlen;
-    char buffer[BUFFERS_LEN], buffer_backup[BUFFERS_LEN];
     MD5_CTX md5_ctx;
     static const unsigned int beg_flags_len = 4;
     static const unsigned short CRC_length = 16;
     unsigned int recv_max_rate;
+    std::deque<Packet> sent_packets;
 
-    inline void random_distort(const int size, const short crc){
+    inline void random_distort(char *buffer, const int size, const short crc){
         if(rand() % 200 < 5) {
             int pos = rand() % size;
             buffer[pos] ^= 1UL << (rand() % 8); // modify one bit
         }
     }
 
-    inline short count_crc(const int size){
+    inline short count_crc(char *buffer, const int size){
         return crc_16((unsigned char*)buffer, size);
     }
 
-    inline void send_datagram(unsigned int size){
+    inline void recv_acks(){
+        char buffer[BUFFERS_LEN];
+        // receive response
+        while(recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &addrDest, &fromlen) != -1){
+            // whether response matches the sent flag (or position in case of data sending),
+            // save the received flags to the position behind the sent flags
+
+            std::deque<Packet> filtered_sent_flags;
+            for(unsigned int i=0; i < sent_packets.size(); i++) {
+                if (memcmp(buffer + beg_flags_len, (void*)&sent_packets.at(i), beg_flags_len) == 0) {
+                    if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
+                        std::cout << "received NAME ACK" << std::endl;
+                        memcpy((void *) &recv_max_rate, buffer + beg_flags_len + 4, 4);
+                        std::cout << "received rate " << recv_max_rate << " packets/s" << std::endl;
+                    } else if (memcmp(buffer, flag_length, sizeof(flag_length[0])) == 0)
+                        std::cout << "received LENG ACK" << std::endl;
+                    else if (memcmp(buffer, flag_hash, sizeof(flag_hash[0])) == 0)
+                        std::cout << "received HASH ACK" << std::endl;
+//                        return;
+                } else filtered_sent_flags.push_back(sent_packets.at(i));
+            }
+            sent_packets = move(filtered_sent_flags);
+        }
+    }
+
+    // makes sure the last few packets are receives on the other side
+    inline void finalize_sending(){
+        while (sent_packets.size() > 0) {
+            sendto(sockfd, sent_packets.front().data, sent_packets.front().size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+            recv_acks();
+        }
+    }
+
+    inline void send_datagram(char *buffer, unsigned int size){
         assert(size + CRC_length <= BUFFERS_LEN);
 
-        short crc = count_crc(size);
+        short crc = count_crc(buffer, size);
         //append crc to the end
         memcpy(buffer+size, (void*)&crc, CRC_length);
 
+        int sent_flag;
+        memcpy((void*)&sent_flag, buffer, beg_flags_len);
+        sent_packets.emplace_back(Packet(sent_flag, size, buffer));
+
+        while (sent_packets.size() >= WINDOW_SIZE) {
+            sendto(sockfd, sent_packets.front().data, sent_packets.front().size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+            recv_acks();
+        }
+
         // backup_buffer before the distortion
+        char buffer_backup[BUFFERS_LEN];
         memcpy(buffer_backup, buffer, BUFFERS_LEN);
-        while(true){
+//        while(true){
             //restore backup
             memcpy(buffer, buffer_backup, BUFFERS_LEN);
             // randomly change one bit
-            random_distort(size, crc);
+            random_distort(buffer, size, crc);
 
             // randomly forget to send
             int rnd = rand() % SENDRATEMOD;
             if(rnd < SENDRATE) sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-
-            // receive response
-            while(recvfrom(sockfd, buffer+beg_flags_len, sizeof(buffer)-beg_flags_len, 0, (sockaddr *) &addrDest, &fromlen) != -1){
-                // whether response matches the sent flag (or position in case of data sending)
-                // save the received flags to the position behind the sent flags
-                if(memcmp(buffer+beg_flags_len, buffer_backup, beg_flags_len) == 0) {
-                    if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
-                        std::cout << "received NAME ACK" << std::endl;
-                        memcpy((void*)&recv_max_rate, buffer+beg_flags_len+4, 4);
-                        std::cout << "received rate " << recv_max_rate << " packets/s" << std::endl;
-                    }
-                    else if (memcmp(buffer, flag_length, sizeof(flag_length[0])) == 0)
-                        std::cout << "received LENG ACK" << std::endl;
-                    else if (memcmp(buffer, flag_hash, sizeof(flag_hash[0])) == 0)
-                        std::cout << "received HASH ACK" << std::endl;
-                    return;
-                }
-            }
-        }
+            recv_acks();
+//        }
     }
 
     inline void send_name(const char *name){
-        memcpy(buffer, (void*)&flag_name, sizeof(flag_name[0]));
-        memcpy(buffer+sizeof(flag_name[0]), name, BUFFERS_LEN);
-        send_datagram(sizeof(flag_name[0])+strlen(name));
+        char buffer[BUFFERS_LEN];
+        memcpy( buffer, (void*)&flag_name, sizeof(flag_name[0]) );
+        memcpy( buffer+sizeof(flag_name[0]), name, BUFFERS_LEN );
+        send_datagram( buffer, sizeof(flag_name[0])+strlen(name) );
     }
 
     inline void send_length(FILE* file_in){
+        char buffer[BUFFERS_LEN];
         fseek(file_in, 0L, SEEK_END);
         //get size of the file
         long file_size = ftell(file_in);
         // copy length flag to the beggining of the buffer
-        memcpy(buffer, (void*)&flag_length, sizeof(flag_length[0]));
-        // copy the length behind the flags
-        memcpy(buffer+sizeof(flag_length[0]), (void*)&file_size, sizeof(long));
+        memcpy( buffer, (void*)&flag_length, sizeof(flag_length[0]) );
+        // copy the length to behind the flags
+        memcpy( buffer+sizeof(flag_length[0]), (void*)&file_size, sizeof(long) );
         // send the buffer
-        send_datagram(sizeof(flag_length[0])+sizeof(long));
+        send_datagram( buffer, sizeof(flag_length[0])+sizeof(long) );
         rewind(file_in);
     }
 
@@ -158,27 +200,27 @@ private:
         size_t chars_read;
         int pos = 0;
         clock_t oldclock = clock(); // used for flow control
-        clock_t newclock = clock();
+        clock_t newclock;
         unsigned int sent = 0;
         std::cout << "Sending data";
+
+        char buffer[BUFFERS_LEN];
         while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_length, file_in)) > 0) {
             MD5_Update(&md5_ctx, buffer + 4, chars_read);
 
             memcpy(buffer, (void*)&pos, beg_flags_len);
-            send_datagram(beg_flags_len+chars_read);
+            send_datagram( buffer, beg_flags_len+chars_read );
             pos += chars_read;
             std::cout << ".";
             std::flush(std::cout);
 
             ++sent;
             newclock = clock();
-//            std::cout << "interval " << ((1/(double)maxrate)*CLOCKS_PER_SEC) << std::endl;
             unsigned int int_length = (1/(double)maxrate)*CLOCKS_PER_SEC;
             if ((newclock - oldclock) < int_length && maxrate != 0){
 //                usleep(CLOCKS_PER_SEC - newclock + oldclock);
                 unsigned int remaining_clocks_to_wait = (int_length - (newclock - oldclock));
                 unsigned int mics_to_wait = (double)1000000*remaining_clocks_to_wait / ((double)CLOCKS_PER_SEC);
-//                std::cout << mics_to_wait << std::endl;
                 usleep(mics_to_wait);
                 // assuming CLOCKS_PER_SEC to be 1000000
             }
@@ -189,9 +231,10 @@ private:
     }
 
     inline void send_hash(){
-        MD5_Final((unsigned char*)buffer + beg_flags_len, &md5_ctx);
-        memcpy(buffer, flag_hash, sizeof(flag_hash[0]));
-        send_datagram(sizeof(flag_hash[0])+4);
+        char buffer[BUFFERS_LEN];
+        MD5_Final( (unsigned char*)buffer + beg_flags_len, &md5_ctx );
+        memcpy( buffer, flag_hash, sizeof(flag_hash[0]) );
+        send_datagram( buffer, sizeof(flag_hash[0])+4 );
     }
 
 public:
@@ -227,6 +270,7 @@ public:
         send_length(file_in);
         send_data(file_in, maxrate);
         send_hash();
+        finalize_sending();
         close(sockfd);
         fclose(file_in);
     }

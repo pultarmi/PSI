@@ -10,6 +10,10 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/mman.h>
 #include <openssl/md5.h>
 
 #define TARGET_IP	"127.0.0.1"
@@ -46,7 +50,7 @@ static void init_crc16_tab( void ) {
         crc_tab16[i] = crc;
     }
     crc_tab16_init = true;
-}  /* init_crc16_tab */
+}
 uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
     uint16_t crc;
     const unsigned char *ptr;
@@ -58,7 +62,7 @@ uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
             crc = (crc >> 8) ^ crc_tab16[ (crc ^ (uint16_t) *ptr++) & 0x00FF ];
         }
     return crc;
-}  /* crc_16 */
+}
 
 
 class Receiver {
@@ -125,8 +129,8 @@ private:
         }
         return size;
     }
-    void receive_data(FILE *file_out, int length){
-        int pos = 0, pos_prev = -(BUFFERS_LEN - beg_flags_len - CRC_length), pos_exp = 0;
+    void receive_data(unsigned char *mapped_output, int length){
+        int pos = 0, pos_prev = -(BUFFERS_LEN - beg_flags_len - CRC_length);//, pos_exp = 0;
         do{
             while(true) {
                 recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
@@ -139,11 +143,8 @@ private:
                 sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
                 memcpy((void*)&pos, buffer, beg_flags_len);
 
-                if(pos == flag_length[0]) {
-//                    sendto(sockfd, flag_length, sizeof(flag_length[1]), 0, (sockaddr *) &from, sizeof(from));
-                    continue;
-                }
-                if(pos < 0 || pos == pos_prev || pos != pos_exp) {
+//                if(pos < 0 || pos == pos_prev || pos != pos_exp) {
+                if(pos < 0 || pos == pos_prev) {
                     continue;
                 }
 
@@ -151,13 +152,15 @@ private:
 
                 pos_prev = pos;
 
-                pos_exp = pos + recv_len - beg_flags_len;
-                std::cout << "received data " << pos << ", next exp: " << pos_exp << std::endl;
-                fwrite(buffer + beg_flags_len, recv_len - beg_flags_len, 1, file_out);
+//                pos_exp = pos + recv_len - beg_flags_len;
+                std::cout << "received data " << pos << std::endl;// << ", next exp: " << pos_exp << std::endl;
+//                fwrite(buffer + beg_flags_len, recv_len - beg_flags_len, 1, file_out);
+                memcpy(mapped_output, buffer+beg_flags_len, recv_len);
+
                 MD5_Update(&md5_ctx, buffer + 4, recv_len - beg_flags_len);
                 break;
             }
-        } while(pos_exp < length);
+        } while(pos + recv_len < length);
     }
     char *receive_hash(){
         char *hash;
@@ -214,12 +217,18 @@ public:
         int length = receive_length();
         std::cout << "length: " << length << std::endl;
 
-        FILE *file_out = fopen(file_name, "w");
-        receive_data(file_out, length);
+//        FILE *file_out = fopen(file_name, "w");
+        int fd_out = open(file_name, O_RDWR|O_CREAT, 0644);
+        lseek (fd_out, length-1, SEEK_SET);
+        if(write (fd_out, "1", 1) == -1) throw("sth really bad");
+        lseek (fd_out, 0, SEEK_SET);
+        unsigned char *mapped_output = (unsigned char*)mmap(nullptr, length, PROT_WRITE, MAP_SHARED, fd_out, 0);
+        receive_data(mapped_output, length);
 
         char *hash = receive_hash();
 
-        fclose(file_out);
+//        fclose(file_out);
+        munmap(mapped_output, length);
     }
 };
 
