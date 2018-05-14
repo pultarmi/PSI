@@ -87,7 +87,7 @@ private:
     static const unsigned short CRC_LEN_bits = 16;
     static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
     unsigned int glob_max_rate;
-    std::deque<Packet> sent_packets;
+    std::deque<std::pair<Packet, bool>> sent_packets;
     clock_t oldclock;
 
     inline void random_distort(char *buffer, const int size){
@@ -101,7 +101,6 @@ private:
         return crc_16((unsigned char*)buffer, size);
     }
 
-
     inline void recv_acks(){
         char buffer[BUFFERS_LEN];
         // receive response
@@ -109,11 +108,12 @@ private:
             // whether response matches the sent flag (or position in case of data sending),
             // save the received flags to the position behind the sent flags
 
-            std::deque<Packet> filtered_sent_flags;
+//            std::deque<std::pair<Packet,bool>> filtered_sent_flags;
             for (unsigned int i = 0; i < sent_packets.size(); i++) {
 
-                if (memcmp(buffer, (void *) &sent_packets.at(i), beg_flags_len) == 0) {
+                if (memcmp(buffer, (void *) &sent_packets.at(i).first.flag, beg_flags_len) == 0) {
 //                    std::cout << "A" << std::endl;
+                    sent_packets.at(i).second = true;
 
                     if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
                         std::cout << "received NAME ACK" << std::endl;
@@ -125,10 +125,10 @@ private:
                         std::cout << "received LENG ACK" << std::endl;
                     else if (memcmp(buffer, flag_hash, sizeof(flag_hash[0])) == 0)
                         std::cout << "received HASH ACK" << std::endl;
-                } else filtered_sent_flags.push_back(sent_packets.at(i));
+                }// else filtered_sent_flags.push_back(sent_packets.at(i));
 
             }
-            sent_packets = move(filtered_sent_flags);
+//            sent_packets = move(filtered_sent_flags);
         }
     }
 
@@ -153,8 +153,10 @@ private:
             std::cout << "Wfull" << std::endl;
         while (sent_packets.size() > threshold) {
 //            sendto(sockfd, sent_packets.front().data, sent_packets.front().size, 0, (sockaddr *) &addrDest, sizeof(addrDest));
-            send_with_rate( sent_packets.front().data, sent_packets.front().size );
+            send_with_rate( sent_packets.front().first.data, sent_packets.front().first.size );
             recv_acks();
+            if(sent_packets.at(0).second == true)
+                sent_packets.pop_front();
         }
     }
 
@@ -168,7 +170,7 @@ private:
             short crc = count_crc(buffer, beg_flags_len);
             memcpy(buffer+beg_flags_len, (void*)&crc, CRC_LEN_bytes);
             std::cout << "signaling end" << std::endl;
-            sent_packets.emplace_back(Packet(flag_end[0], beg_flags_len+CRC_LEN_bytes, buffer));
+            sent_packets.emplace_back( std::pair<Packet, bool>(Packet(flag_end[0], beg_flags_len+CRC_LEN_bytes, buffer), false) );
 //            sendto(sockfd, buffer, beg_flags_len+CRC_LEN_bytes, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 
             send_with_rate( buffer, beg_flags_len+CRC_LEN_bytes );
@@ -187,7 +189,7 @@ private:
 
         int sent_flag;
         memcpy((void*)&sent_flag, buffer, beg_flags_len);
-        sent_packets.emplace_back(Packet(sent_flag, size+CRC_LEN_bytes, buffer));
+        sent_packets.emplace_back( std::pair<Packet, bool>(Packet(sent_flag, size+CRC_LEN_bytes, buffer),false) );
 
         wait_till_sent_num_at_max(WINDOW_SIZE - 1);
 
@@ -300,7 +302,7 @@ public:
         srand(time(NULL));
     }
 
-    void send(const char *name, int maxrate){
+    void send(const char *name, unsigned int maxrate){
         glob_max_rate = maxrate;
         oldclock = clock(); // used for flow control
 
