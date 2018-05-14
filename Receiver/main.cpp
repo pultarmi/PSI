@@ -12,6 +12,7 @@
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
+#include <deque>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <openssl/md5.h>
@@ -76,6 +77,7 @@ private:
     unsigned char beg_flags_len = 4;
     static const unsigned short CRC_LEN_bits = 16;
     static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
+    std::deque<int> got;
 
     inline short strip_CRC(ssize_t &recv_len){
         short crc;
@@ -156,6 +158,18 @@ private:
             if(pos < 0)
                 continue;
 
+            bool found=false;
+            for(int aa=0; aa < got.size(); aa++){
+                if(got.at(aa) == pos)
+                    found = true;
+            }
+            if(found)
+                continue;
+
+            got.push_back(pos);
+            if(got.size() > 100)
+                got.pop_front();
+
             std::cout << "received data " << pos << std::endl;
             memcpy(mapped_output+pos, buffer+beg_flags_len, recv_len - beg_flags_len);
         }
@@ -190,8 +204,6 @@ private:
         if(memcmp(hash, buffer, 4) == 0)
             std::cout << "Hash is OK" << std::endl;
         else std::cout << "Hash does not match" << std::endl;
-//        if(memcmp(hash, buffer, 4) != 0)
-//            std::cout << "Hash does not match" << std::endl;
         return hash;
     }
 public:
