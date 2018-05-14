@@ -15,28 +15,20 @@
 #include <deque>
 #include <openssl/md5.h>
 
-/*
-//#define TARGET_IP	"192.168.0.157"
-#define TARGET_IP "192.168.43.138"
-//#define TARGET_IP	"192.168.0.129"
-//#define TARGET_IP	"192.168.43.10"
-*/
-
 #define BUFFERS_LEN 1024
 
 #define TARGET_PORT 6666
 #define LOCAL_PORT 5555
 
-#define SENDRATE 20
+#define SENDRATE 90
 #define SENDRATEMOD 100
 #define WINDOW_SIZE 8
-
-//TODO selective repeat
 
 const int flag_name[] = {-1, -2};
 const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
-//const int flag_data[] = {-7, -8};
+const int flag_data[] = {-7, -8};
+const int flag_end[] = {-9, -10};
 
 #define	CRC_START_16 0x0000
 #define	CRC_POLY_16	0xA001
@@ -92,11 +84,12 @@ private:
     socklen_t fromlen;
     MD5_CTX md5_ctx;
     static const unsigned int beg_flags_len = 4;
-    static const unsigned short CRC_length = 16;
+    static const unsigned short CRC_LEN_bits = 16;
+    static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
     unsigned int recv_max_rate;
     std::deque<Packet> sent_packets;
 
-    inline void random_distort(char *buffer, const int size, const short crc){
+    inline void random_distort(char *buffer, const int size){
         if(rand() % 200 < 5) {
             int pos = rand() % size;
             buffer[pos] ^= 1UL << (rand() % 8); // modify one bit
@@ -110,66 +103,88 @@ private:
     inline void recv_acks(){
         char buffer[BUFFERS_LEN];
         // receive response
-        while(recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &addrDest, &fromlen) != -1){
+        while(recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &addrDest, &fromlen) != -1) {
             // whether response matches the sent flag (or position in case of data sending),
             // save the received flags to the position behind the sent flags
 
             std::deque<Packet> filtered_sent_flags;
-            for(unsigned int i=0; i < sent_packets.size(); i++) {
-                if (memcmp(buffer + beg_flags_len, (void*)&sent_packets.at(i), beg_flags_len) == 0) {
+            for (unsigned int i = 0; i < sent_packets.size(); i++) {
+
+                if (memcmp(buffer, (void *) &sent_packets.at(i), beg_flags_len) == 0) {
+//                    std::cout << "A" << std::endl;
+
                     if (memcmp(buffer, flag_name, sizeof(flag_name[0])) == 0) {
                         std::cout << "received NAME ACK" << std::endl;
-                        memcpy((void *) &recv_max_rate, buffer + beg_flags_len + 4, 4);
+                        memcpy((void *) &recv_max_rate, buffer + beg_flags_len, 4);
                         std::cout << "received rate " << recv_max_rate << " packets/s" << std::endl;
                     } else if (memcmp(buffer, flag_length, sizeof(flag_length[0])) == 0)
                         std::cout << "received LENG ACK" << std::endl;
                     else if (memcmp(buffer, flag_hash, sizeof(flag_hash[0])) == 0)
                         std::cout << "received HASH ACK" << std::endl;
-//                        return;
                 } else filtered_sent_flags.push_back(sent_packets.at(i));
+
             }
             sent_packets = move(filtered_sent_flags);
         }
     }
 
-    // makes sure the last few packets are receives on the other side
-    inline void finalize_sending(){
-        while (sent_packets.size() > 0) {
-            sendto(sockfd, sent_packets.front().data, sent_packets.front().size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+    inline void wait_till_sent_num_at_max(int threshold){
+        if(sent_packets.size() == WINDOW_SIZE)
+            std::cout << "Wfull" << std::endl;
+        while (sent_packets.size() > threshold) {
+            sendto(sockfd, sent_packets.front().data, sent_packets.front().size, 0, (sockaddr *) &addrDest, sizeof(addrDest));
             recv_acks();
         }
     }
 
+    inline void finalize_sending(bool send_end_flag=false){
+        char buffer[BUFFERS_LEN];
+        std::cout << "clearing window..." << std::endl;
+        wait_till_sent_num_at_max(0);
+
+        if(send_end_flag){
+            memcpy(buffer, flag_end, sizeof(flag_end[0]));
+            short crc = count_crc(buffer, beg_flags_len);
+            memcpy(buffer+beg_flags_len, (void*)&crc, CRC_LEN_bytes);
+            std::cout << "signaling end" << std::endl;
+            sent_packets.emplace_back(Packet(flag_end[0], beg_flags_len+CRC_LEN_bytes, buffer));
+            sendto(sockfd, buffer, beg_flags_len+CRC_LEN_bytes, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+
+            wait_till_sent_num_at_max(0);
+        }
+    }
+
     inline void send_datagram(char *buffer, unsigned int size){
-        assert(size + CRC_length <= BUFFERS_LEN);
+        if(size + CRC_LEN_bytes > BUFFERS_LEN)
+            std::cout << "assertion fault" << std::endl;
 
         short crc = count_crc(buffer, size);
         //append crc to the end
-        memcpy(buffer+size, (void*)&crc, CRC_length);
+        memcpy(buffer+size, (void*)&crc, CRC_LEN_bytes);
 
         int sent_flag;
         memcpy((void*)&sent_flag, buffer, beg_flags_len);
-        sent_packets.emplace_back(Packet(sent_flag, size, buffer));
+        sent_packets.emplace_back(Packet(sent_flag, size+CRC_LEN_bytes, buffer));
 
-        while (sent_packets.size() >= WINDOW_SIZE) {
-            sendto(sockfd, sent_packets.front().data, sent_packets.front().size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-            recv_acks();
-        }
+        wait_till_sent_num_at_max(WINDOW_SIZE - 1);
 
         // backup_buffer before the distortion
         char buffer_backup[BUFFERS_LEN];
         memcpy(buffer_backup, buffer, BUFFERS_LEN);
-//        while(true){
-            //restore backup
-            memcpy(buffer, buffer_backup, BUFFERS_LEN);
-            // randomly change one bit
-            random_distort(buffer, size, crc);
+        //restore backup
+        memcpy(buffer, buffer_backup, BUFFERS_LEN);
+        // randomly change one bit
+        random_distort(buffer, size);
 
-            // randomly forget to send
-            int rnd = rand() % SENDRATEMOD;
-            if(rnd < SENDRATE) sendto(sockfd, buffer, size+CRC_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-            recv_acks();
-//        }
+        // randomly forget to send
+        int rnd = rand() % SENDRATEMOD;
+        if(rnd < SENDRATE) {
+            std::flush(std::cout);
+            sendto(sockfd, buffer, size + CRC_LEN_bytes, 0, (sockaddr *) &addrDest, sizeof(addrDest));
+        }
+
+        std::flush(std::cout);
+        recv_acks();
     }
 
     inline void send_name(const char *name){
@@ -194,9 +209,6 @@ private:
     }
 
     inline void send_data(FILE* file_in, unsigned int maxrate){
-        maxrate = std::min(maxrate, recv_max_rate);
-        std::cout << "using rate " << maxrate << " packets/s" << std::endl;
-
         size_t chars_read;
         int pos = 0;
         clock_t oldclock = clock(); // used for flow control
@@ -205,7 +217,9 @@ private:
         std::cout << "Sending data";
 
         char buffer[BUFFERS_LEN];
-        while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_length, file_in)) > 0) {
+        while((chars_read = fread(buffer+beg_flags_len, 1, BUFFERS_LEN - beg_flags_len - CRC_LEN_bytes, file_in)) > 0) {
+            maxrate = std::min(maxrate, recv_max_rate);
+
             MD5_Update(&md5_ctx, buffer + 4, chars_read);
 
             memcpy(buffer, (void*)&pos, beg_flags_len);
@@ -217,15 +231,13 @@ private:
             ++sent;
             newclock = clock();
             unsigned int int_length = (1/(double)maxrate)*CLOCKS_PER_SEC;
-            if ((newclock - oldclock) < int_length && maxrate != 0){
-//                usleep(CLOCKS_PER_SEC - newclock + oldclock);
+            if ( (newclock - oldclock) < int_length ){
                 unsigned int remaining_clocks_to_wait = (int_length - (newclock - oldclock));
                 unsigned int mics_to_wait = (double)1000000*remaining_clocks_to_wait / ((double)CLOCKS_PER_SEC);
                 usleep(mics_to_wait);
                 // assuming CLOCKS_PER_SEC to be 1000000
             }
             oldclock = clock();
-
         }
         std::cout << std::endl;
     }
@@ -266,11 +278,17 @@ public:
 
     void send(const char *name, int maxrate){
         send_name(name);
+        finalize_sending();
         FILE* file_in = fopen(name, "rb");
         send_length(file_in);
+        finalize_sending();
+
         send_data(file_in, maxrate);
+        finalize_sending(true);
+
         send_hash();
         finalize_sending();
+
         close(sockfd);
         fclose(file_in);
     }
@@ -283,7 +301,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     Sender sender(argv[1]);
-    unsigned int maxrate = 0;
+    unsigned int maxrate = INT32_MAX;
     if(argc > 3) maxrate = atoi(argv[3]);
     sender.send(argv[2], maxrate);
 

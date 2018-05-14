@@ -27,7 +27,7 @@ const int flag_name[] = {-1, -2};
 const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
 const int flag_data[] = {-7, -8};
-const unsigned short CRC_length = 16;
+const int flag_end[] = {-9, -10};
 
 #define		CRC_START_16		0x0000
 #define		CRC_POLY_16		0xA001
@@ -74,12 +74,13 @@ private:
     ssize_t recv_len;
     MD5_CTX md5_ctx;
     unsigned char beg_flags_len = 4;
-    const unsigned short CRC_length = 16;
+    static const unsigned short CRC_LEN_bits = 16;
+    static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
 
     inline short strip_CRC(ssize_t &recv_len){
         short crc;
-        recv_len -= CRC_length;
-        memcpy((void*)&crc, buffer+recv_len, CRC_length / 8);
+        recv_len -= CRC_LEN_bytes;
+        memcpy((void*)&crc, buffer+recv_len, CRC_LEN_bytes);
         return crc;
     }
     short count_crc(const int size){
@@ -94,15 +95,18 @@ private:
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
             short crc = strip_CRC(recv_len);
-            if(!check_CRC(crc, recv_len)) {
-                sendto(sockfd, flag_name, sizeof(flag_name[1]), 0, (sockaddr *) &from, sizeof(from));
+            if(!check_CRC(crc, recv_len) || memcmp(buffer, flag_name, beg_flags_len) != 0) {
+                std::cout << "wrong CRC" << std::endl;
+                sendto(sockfd, flag_name+1, sizeof(flag_name[1]), 0, (sockaddr *) &from, sizeof(from));
                 continue;
             }
+            std::cout << "OK, len: " << recv_len << std::endl;
             recv_len -= beg_flags_len;
             file_name = new char[recv_len + 1];
             file_name[recv_len] = 0;
             memcpy(file_name, buffer+beg_flags_len, recv_len);
 
+            std::cout << "sending rate = " << recv_max_rate << std::endl;
             memcpy(buffer+4, (void*)&recv_max_rate, 4);
             sendto(sockfd, buffer, beg_flags_len + 4, 0, (sockaddr *) &from, sizeof(from));
 
@@ -115,8 +119,8 @@ private:
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
             short crc = strip_CRC(recv_len);
-            if(!check_CRC(crc, recv_len)) {
-                sendto(sockfd, flag_length, sizeof(flag_length[1]), 0, (sockaddr *) &from, sizeof(from));
+            if(!check_CRC(crc, recv_len) || memcmp(buffer, flag_length, beg_flags_len) != 0) {
+                sendto(sockfd, flag_length+1, sizeof(flag_length[1]), 0, (sockaddr *) &from, sizeof(from));
                 continue;
             }
             sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
@@ -130,50 +134,44 @@ private:
         return size;
     }
     void receive_data(unsigned char *mapped_output, int length){
-        int pos = 0, pos_prev = -(BUFFERS_LEN - beg_flags_len - CRC_length);//, pos_exp = 0;
-        do{
-            while(true) {
-                recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
-                short crc = strip_CRC(recv_len);
-                if(!check_CRC(crc, recv_len)) {
-                    sendto(sockfd, flag_data, sizeof(flag_data[1]), 0, (sockaddr *) &from, sizeof(from));
-                    std::cout << "wrong CRC" << std::endl;
-                    continue;
-                }
-                sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
-                memcpy((void*)&pos, buffer, beg_flags_len);
-
-//                if(pos < 0 || pos == pos_prev || pos != pos_exp) {
-                if(pos < 0 || pos == pos_prev) {
-                    continue;
-                }
-
-                sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
-
-                pos_prev = pos;
-
-//                pos_exp = pos + recv_len - beg_flags_len;
-                std::cout << "received data " << pos << std::endl;// << ", next exp: " << pos_exp << std::endl;
-//                fwrite(buffer + beg_flags_len, recv_len - beg_flags_len, 1, file_out);
-                memcpy(mapped_output, buffer+beg_flags_len, recv_len);
-
-                MD5_Update(&md5_ctx, buffer + 4, recv_len - beg_flags_len);
-                break;
-            }
-        } while(pos + recv_len < length);
-    }
-    char *receive_hash(){
-        char *hash;
+        int pos = 0;
         while(true) {
             recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
             short crc = strip_CRC(recv_len);
             if(!check_CRC(crc, recv_len)) {
-                sendto(sockfd, flag_hash, sizeof(flag_hash[1]), 0, (sockaddr *) &from, sizeof(from));
+                sendto(sockfd, flag_data+1, sizeof(flag_data[1]), 0, (sockaddr *) &from, sizeof(from));
+                int flag;
+                memcpy((void*)&flag, buffer, 4);
+                std::cout << "wrong CRC, has flag: " << flag << std::endl;
                 continue;
             }
             sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
 
-            if(memcmp(buffer, flag_hash, sizeof(flag_hash[0])) != 0)
+            memcpy((void*)&pos, buffer, beg_flags_len);
+            if(pos == flag_end[0]) {
+                std::cout << "end of data received" << std::endl;
+                return;
+            }
+
+            if(pos < 0)
+                continue;
+
+            std::cout << "received data " << pos << std::endl;
+            memcpy(mapped_output+pos, buffer+beg_flags_len, recv_len - beg_flags_len);
+        }
+    }
+    char *receive_hash(unsigned char *mapped_output, int out_size){
+        char *hash;
+        while(true) {
+            recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+            short crc = strip_CRC(recv_len);
+            if( !check_CRC(crc, recv_len) || memcmp(buffer, flag_hash, beg_flags_len) != 0 ) {
+                sendto(sockfd, flag_hash+1, sizeof(flag_hash[1]), 0, (sockaddr *) &from, sizeof(from));
+                continue;
+            }
+            sendto(sockfd, buffer, beg_flags_len, 0, (sockaddr *) &from, sizeof(from));
+
+            if( memcmp(buffer, flag_hash, sizeof(flag_hash[0])) != 0 )
                 continue;
 
             recv_len -= beg_flags_len;
@@ -183,12 +181,16 @@ private:
             break;
         }
 
+        std::cout << "validating hash..." << std::endl;
+
+        for(int i=0; i < out_size; i++)
+            MD5_Update(&md5_ctx, mapped_output + i, 1);
+
         MD5_Final((unsigned char*)buffer, &md5_ctx);
         if(memcmp(hash, buffer, 4) == 0)
             std::cout << "Hash is OK" << std::endl;
         if(memcmp(hash, buffer, 4) != 0)
             std::cout << "Hash does not match" << std::endl;
-
         return hash;
     }
 public:
@@ -217,7 +219,6 @@ public:
         int length = receive_length();
         std::cout << "length: " << length << std::endl;
 
-//        FILE *file_out = fopen(file_name, "w");
         int fd_out = open(file_name, O_RDWR|O_CREAT, 0644);
         lseek (fd_out, length-1, SEEK_SET);
         if(write (fd_out, "1", 1) == -1) throw("sth really bad");
@@ -225,9 +226,8 @@ public:
         unsigned char *mapped_output = (unsigned char*)mmap(nullptr, length, PROT_WRITE, MAP_SHARED, fd_out, 0);
         receive_data(mapped_output, length);
 
-        char *hash = receive_hash();
+        char *hash = receive_hash(mapped_output, length);
 
-//        fclose(file_out);
         munmap(mapped_output, length);
     }
 };
