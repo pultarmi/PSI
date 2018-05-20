@@ -15,6 +15,7 @@
 #include <deque>
 #include <sys/types.h>
 #include <sys/mman.h>
+#include <stdexcept>
 #include <openssl/md5.h>
 
 #define TARGET_IP	"127.0.0.1"
@@ -29,6 +30,7 @@ const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
 const int flag_data[] = {-7, -8};
 const int flag_end[] = {-9, -10};
+const int flag_auth[] = {-11, -12, -13, -14};
 
 #define		CRC_START_16		0x0000
 #define		CRC_POLY_16		0xA001
@@ -65,6 +67,15 @@ uint16_t crc_16( const unsigned char *input_str, size_t num_bytes ) {
     return crc;
 }
 
+class Auth_key{
+public:
+    int n, ex;
+    Auth_key(){}
+    Auth_key(int n, int ex){
+        this->n = n;
+        this->ex = ex;
+    }
+};
 
 class Receiver {
 private:
@@ -78,6 +89,9 @@ private:
     static const unsigned short CRC_LEN_bits = 16;
     static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
     std::deque<int> got;
+    Auth_key key_receiver_public;
+    Auth_key key_receiver_private;
+    Auth_key key_sender_public;
 
     inline short strip_CRC(ssize_t &recv_len){
         short crc;
@@ -159,7 +173,7 @@ private:
                 continue;
 
             bool found=false;
-            for(int aa=0; aa < got.size(); aa++){
+            for(unsigned int aa=0; aa < got.size(); aa++){
                 if(got.at(aa) == pos)
                     found = true;
             }
@@ -206,6 +220,33 @@ private:
         else std::cout << "Hash does not match" << std::endl;
         return hash;
     }
+
+    inline bool authorize(const unsigned int w_number){
+        char buffer[BUFFERS_LEN];
+
+        recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &from, &fromlen);
+
+        unsigned int recv_number;
+        memcpy((void*)&recv_number, buffer+4, sizeof(recv_number));
+        unsigned int in_number = recv_number;
+        for(int i=1; i < key_sender_public.ex; i++){
+            in_number *= recv_number;
+            in_number %= key_sender_public.n;
+        }
+        std::cout << "Got number " << in_number << std::endl;
+
+        unsigned int out_number = w_number;
+        for(int i=1; i < key_receiver_private.ex; i++){
+            out_number *= w_number;
+            out_number %= key_receiver_private.n;
+        }
+        memcpy(buffer, (void*)&flag_auth, beg_flags_len);
+        memcpy(buffer+sizeof(out_number), (void*)&out_number, sizeof(out_number));
+        sendto(sockfd, buffer, beg_flags_len + sizeof(out_number), 0, (sockaddr *) &from, sizeof(from));
+
+        return in_number == w_number;
+    }
+
 public:
     Receiver(){
         local.sin_family = AF_INET;
@@ -222,10 +263,28 @@ public:
 
         MD5_Init(&md5_ctx);
     }
+
     ~Receiver(){
         close(sockfd);
     }
-    void receive(unsigned int recv_max_rate){
+
+    void set_key_receiver(int n, int e, int d){
+        key_receiver_public.n = n;
+        key_receiver_public.ex = e;
+
+        key_receiver_private.n = n;
+        key_receiver_private.ex = d;
+    }
+
+    void set_key_sender(int n, int e){
+        key_sender_public.n = n;
+        key_sender_public.ex = e;
+    }
+
+    void receive(unsigned int w_number, unsigned int recv_max_rate){
+        if(!authorize(w_number))
+            throw std::runtime_error("Authorization failed");
+
         char *file_name = receive_name(recv_max_rate);
         std::cout << "name " << file_name << std::endl;
 
@@ -247,8 +306,17 @@ public:
 
 int main(int argc, char** argv) {
     Receiver receiver;
-    if(argc > 1)
-        receiver.receive(atoi(argv[1]));
-    else receiver.receive(INT32_MAX);
+
+    receiver.set_key_receiver(323, 31, 79); // n,e,d
+    receiver.set_key_sender(3233, 17); // n,e
+
+    if(argc < 2){
+        throw std::invalid_argument("Please provide welcome number");
+    }
+    unsigned int w_number = atoi(argv[1]);
+
+    if(argc > 2)
+        receiver.receive(w_number, atoi(argv[2]));
+    else receiver.receive(w_number, INT32_MAX);
     return 0;
 }

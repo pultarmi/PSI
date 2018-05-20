@@ -29,6 +29,7 @@ const int flag_length[] = {-3, -4};
 const int flag_hash[] = {-5, -6};
 const int flag_data[] = {-7, -8};
 const int flag_end[] = {-9, -10};
+const int flag_auth[] = {-11, -12, -13, -14};
 
 #define	CRC_START_16 0x0000
 #define	CRC_POLY_16	0xA001
@@ -77,6 +78,16 @@ public:
     }
 };
 
+class Auth_key{
+public:
+    int n, ex;
+    Auth_key(){}
+    Auth_key(int n, int ex){
+        this->n = n;
+        this->ex = ex;
+    }
+};
+
 class Sender{
 private:
     int sockfd;
@@ -89,6 +100,9 @@ private:
     unsigned int glob_max_rate;
     std::deque<std::pair<Packet, bool>> sent_packets;
     clock_t oldclock;
+    Auth_key key_sender_public;
+    Auth_key key_sender_private;
+    Auth_key key_receiver_public;
 
     inline void random_distort(char *buffer, const int size){
         if(rand() % 200 < 5) {
@@ -148,7 +162,7 @@ private:
         sendto(sockfd, buffer, size, 0, (sockaddr *) &addrDest, sizeof(addrDest));
     }
 
-    inline void wait_till_sent_num_at_max(int threshold){
+    inline void wait_till_sent_num_at_max(unsigned int threshold){
         if(sent_packets.size() == WINDOW_SIZE)
             std::cout << "Wfull" << std::endl;
         while (sent_packets.size() > threshold) {
@@ -275,6 +289,36 @@ private:
         send_datagram( buffer, sizeof(flag_hash[0])+4 );
     }
 
+    inline bool authorize(const unsigned int w_number){
+        char buffer[BUFFERS_LEN];
+        unsigned int out_number = w_number;
+        for(int i=1; i < key_sender_private.ex; i++){
+            out_number *= w_number;
+            out_number %= key_sender_private.n;
+        }
+        memcpy(buffer, (void*)&flag_auth, beg_flags_len);
+        memcpy(buffer+sizeof(out_number), (void*)&out_number, sizeof(out_number));
+//        send_datagram(buffer, beg_flags_len + sizeof(w_number));
+
+        sendto(sockfd, buffer, beg_flags_len + sizeof(out_number), 0, (sockaddr *) &addrDest, sizeof(addrDest));
+        while(recvfrom(sockfd, buffer, sizeof(buffer), 0, (sockaddr *) &addrDest, &fromlen) == -1) {
+            usleep(10000);
+            sendto(sockfd, buffer, beg_flags_len + sizeof(out_number), 0, (sockaddr *) &addrDest, sizeof(addrDest));
+        }
+
+        unsigned int rec_number;
+        memcpy((void*)&rec_number, buffer+beg_flags_len, sizeof(rec_number));
+        unsigned int in_number = rec_number;
+
+        for(int i=1; i < key_receiver_public.ex; i++){
+            in_number *= rec_number;
+            in_number %= key_receiver_public.n;
+        }
+
+        std::cout << "Got number " << in_number << std::endl;
+        return in_number == w_number;
+    }
+
 public:
     Sender(char* target_ip){
         local.sin_family = AF_INET;
@@ -302,7 +346,23 @@ public:
         srand(time(NULL));
     }
 
-    void send(const char *name, unsigned int maxrate){
+    void set_key_sender(int n, int e, int d){
+        key_sender_public.n = n;
+        key_sender_public.ex = e;
+
+        key_sender_private.n = n;
+        key_sender_private.ex = d;
+    }
+
+    void set_key_receiver(int n, int e){
+        key_receiver_public.n = n;
+        key_receiver_public.ex = e;
+    }
+
+    void send(unsigned w_number, const char *name, unsigned int maxrate){
+        if(!authorize(w_number))
+            throw std::runtime_error("Authorization failed");
+
         glob_max_rate = maxrate;
         oldclock = clock(); // used for flow control
 
@@ -323,16 +383,23 @@ public:
     }
 };
 
-
 int main(int argc, char** argv) {
     if(argc < 3){
-        std::cout << "Usage: ./" << argv[0] << " <Target IP> <Relative Path> <Maximum Packet Rate>" << std::endl;
+        std::cout << "Usage: " << argv[0] << " <Target IP> <Relative Path> <Maximum Packet Rate>" << std::endl;
         return 1;
     }
     Sender sender(argv[1]);
+
+    sender.set_key_sender(3233, 17, 413); // n,e,d
+    sender.set_key_receiver(323, 31); // n,e
+
+    std::cout << "Please provide welcome number" << std::endl;
+    unsigned int w_number;
+    std::cin >> w_number;
+
     unsigned int maxrate = INT32_MAX;
     if(argc > 3) maxrate = atoi(argv[3]);
-    sender.send(argv[2], maxrate);
+    sender.send(w_number, argv[2], maxrate);
 
     return 0;
 }
