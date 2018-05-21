@@ -89,7 +89,7 @@ private:
     static const unsigned short CRC_LEN_bits = 16;
     static const unsigned short CRC_LEN_bytes = CRC_LEN_bits / 8;
     std::deque<int> got;
-    Auth_key key_receiver_public;
+//    Auth_key key_receiver_public;
     Auth_key key_receiver_private;
     Auth_key key_sender_public;
 
@@ -268,9 +268,9 @@ public:
         close(sockfd);
     }
 
-    void set_key_receiver(int n, int e, int d){
-        key_receiver_public.n = n;
-        key_receiver_public.ex = e;
+    void set_key_receiver(int n, int d){
+//        key_receiver_public.n = n;
+//        key_receiver_public.ex = e;
 
         key_receiver_private.n = n;
         key_receiver_private.ex = d;
@@ -307,8 +307,8 @@ public:
 int main(int argc, char** argv) {
     Receiver receiver;
 
-    receiver.set_key_receiver(323, 31, 79); // n,e,d
-    receiver.set_key_sender(3233, 17); // n,e
+    receiver.set_key_receiver(/*n*/323, /*d*/31); // n=323,e=31,d=79
+    receiver.set_key_sender(/*n*/3233, /*e*/17); // n=3233,e=17,d=413
 
     if(argc < 2){
         throw std::invalid_argument("Please provide welcome number");

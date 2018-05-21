@@ -100,7 +100,7 @@ private:
     unsigned int glob_max_rate;
     std::deque<std::pair<Packet, bool>> sent_packets;
     clock_t oldclock;
-    Auth_key key_sender_public;
+//    Auth_key key_sender_public;
     Auth_key key_sender_private;
     Auth_key key_receiver_public;
 
@@ -346,9 +346,9 @@ public:
         srand(time(NULL));
     }
 
-    void set_key_sender(int n, int e, int d){
-        key_sender_public.n = n;
-        key_sender_public.ex = e;
+    void set_key_sender(int n, int d){
+//        key_sender_public.n = n;
+//        key_sender_public.ex = e;
 
         key_sender_private.n = n;
         key_sender_private.ex = d;
@@ -390,8 +390,8 @@ int main(int argc, char** argv) {
     }
     Sender sender(argv[1]);
 
-    sender.set_key_sender(3233, 17, 413); // n,e,d
-    sender.set_key_receiver(323, 31); // n,e
+    sender.set_key_sender(/*n*/3233, /*d*/413); // n=3233,e=17,d=413
+    sender.set_key_receiver(/*n*/323, /*e*/31); // n=323,e=31,d=79
 
     std::cout << "Please provide welcome number" << std::endl;
     unsigned int w_number;
