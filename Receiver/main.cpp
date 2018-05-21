@@ -307,7 +307,7 @@ public:
 int main(int argc, char** argv) {
     Receiver receiver;
 
-    receiver.set_key_receiver(/*n*/323, /*d*/31); // n=323,e=31,d=79
+    receiver.set_key_receiver(/*n*/323, /*d*/79); // n=323,e=31,d=79
     receiver.set_key_sender(/*n*/3233, /*e*/17); // n=3233,e=17,d=413
 
     if(argc < 2){
